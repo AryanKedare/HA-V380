@@ -1,0 +1,16 @@
+{
+  "domain": "v380_cloud",
+  "name": "V380 Cloud (Experimental)",
+  "version": "0.1.0",
+  "config_flow": true,
+  "documentation": "https://github.com/AryanKedare/HA-V380",
+  "issue_tracker": "https://github.com/AryanKedare/HA-V380/issues",
+  "dependencies": [
+    "http",
+    "media_source",
+    "stream"
+  ],
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "requirements": []
+}

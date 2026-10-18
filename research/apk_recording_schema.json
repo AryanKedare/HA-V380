@@ -1,0 +1,466 @@
+{
+  "artifact": "base.apk",
+  "sha256": "1cb63bc47ec36f46b9764ecdd6cbdf9a535d3ce772b7a02b94e7f2f3a00cb91f",
+  "evidence_type": "static DEX field annotation",
+  "fields": [
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3DateListJsonParse$Data;",
+      "field": "cursor",
+      "field_index": 24248,
+      "annotation_item_dex_offset": "0x348af3",
+      "wire_name": "cursor"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3DateListJsonParse$Data;",
+      "field": "dates",
+      "field_index": 24249,
+      "annotation_item_dex_offset": "0x348afd",
+      "wire_name": "dates"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3DateListJsonParse$Dates;",
+      "field": "filename",
+      "field_index": 24250,
+      "annotation_item_dex_offset": "0x348b4d",
+      "wire_name": "fne"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3DateListJsonParse$Dates;",
+      "field": "firm_list",
+      "field_index": 24251,
+      "annotation_item_dex_offset": "0x348b57",
+      "wire_name": "flt"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3DateListJsonParse$FirmList;",
+      "field": "bucket_index",
+      "field_index": 24252,
+      "annotation_item_dex_offset": "0x348bac",
+      "wire_name": "bdx"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3DateListJsonParse;",
+      "field": "data",
+      "field_index": 24254,
+      "annotation_item_dex_offset": "0x348bc5",
+      "wire_name": "data"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3DateListJsonParse;",
+      "field": "result",
+      "field_index": 24255,
+      "annotation_item_dex_offset": "0x348bcf",
+      "wire_name": "result"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse$Data;",
+      "field": "bucket_index",
+      "field_index": 24256,
+      "annotation_item_dex_offset": "0x348bac",
+      "wire_name": "bdx"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse$Data;",
+      "field": "bucket_name",
+      "field_index": 24257,
+      "annotation_item_dex_offset": "0x348beb",
+      "wire_name": "bnm"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse$Data;",
+      "field": "dst",
+      "field_index": 24258,
+      "annotation_item_dex_offset": "0x348bf5",
+      "wire_name": "dst"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse$Data;",
+      "field": "endpoint",
+      "field_index": 24259,
+      "annotation_item_dex_offset": "0x348bff",
+      "wire_name": "ep"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse$Data;",
+      "field": "file_path",
+      "field_index": 24260,
+      "annotation_item_dex_offset": "0x348c09",
+      "wire_name": "fth"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse$Data;",
+      "field": "pano",
+      "field_index": 24261,
+      "annotation_item_dex_offset": "0x348c13",
+      "wire_name": "pao"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse$Data;",
+      "field": "prefix_path",
+      "field_index": 24262,
+      "annotation_item_dex_offset": "0x348c1d",
+      "wire_name": "pth"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse$Data;",
+      "field": "series",
+      "field_index": 24263,
+      "annotation_item_dex_offset": "0x348c27",
+      "wire_name": "ser"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse$Data;",
+      "field": "slice_inf",
+      "field_index": 24264,
+      "annotation_item_dex_offset": "0x348c31",
+      "wire_name": "slf"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse$Data;",
+      "field": "thumb_url",
+      "field_index": 24265,
+      "annotation_item_dex_offset": "0x348c3b",
+      "wire_name": "tbl"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse$Data;",
+      "field": "total_time",
+      "field_index": 24266,
+      "annotation_item_dex_offset": "0x348c45",
+      "wire_name": "du"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse$Data;",
+      "field": "vsPos",
+      "field_index": 24267,
+      "annotation_item_dex_offset": "0x348c4f",
+      "wire_name": "vps"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse$Data;",
+      "field": "zone",
+      "field_index": 24268,
+      "annotation_item_dex_offset": "0x348c59",
+      "wire_name": "zn"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse$SliceInf;",
+      "field": "end_time",
+      "field_index": 24269,
+      "annotation_item_dex_offset": "0x348c6d",
+      "wire_name": "ede"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse$SliceInf;",
+      "field": "filename",
+      "field_index": 24270,
+      "annotation_item_dex_offset": "0x348b4d",
+      "wire_name": "fne"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse$SliceInf;",
+      "field": "rtype",
+      "field_index": 24271,
+      "annotation_item_dex_offset": "0x348c77",
+      "wire_name": "rte"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse$SliceInf;",
+      "field": "start_time",
+      "field_index": 24272,
+      "annotation_item_dex_offset": "0x348c81",
+      "wire_name": "ste"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse;",
+      "field": "data",
+      "field_index": 24274,
+      "annotation_item_dex_offset": "0x348bc5",
+      "wire_name": "data"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3RecListJsonParse;",
+      "field": "result",
+      "field_index": 24275,
+      "annotation_item_dex_offset": "0x348bcf",
+      "wire_name": "result"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse$BucketConfig;",
+      "field": "ak",
+      "field_index": 24277,
+      "annotation_item_dex_offset": "0x348d16",
+      "wire_name": "ak"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse$BucketConfig;",
+      "field": "bucketId",
+      "field_index": 24278,
+      "annotation_item_dex_offset": "0x348d20",
+      "wire_name": "id"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse$BucketConfig;",
+      "field": "dir",
+      "field_index": 24279,
+      "annotation_item_dex_offset": "0x348d2a",
+      "wire_name": "dir"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse$BucketConfig;",
+      "field": "exp",
+      "field_index": 24280,
+      "annotation_item_dex_offset": "0x348d34",
+      "wire_name": "exp"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse$BucketConfig;",
+      "field": "host",
+      "field_index": 24281,
+      "annotation_item_dex_offset": "0x348d3e",
+      "wire_name": "host"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse$BucketConfig;",
+      "field": "name",
+      "field_index": 24282,
+      "annotation_item_dex_offset": "0x348d48",
+      "wire_name": "name"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse$BucketConfig;",
+      "field": "region",
+      "field_index": 24283,
+      "annotation_item_dex_offset": "0x348d52",
+      "wire_name": "region"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse$BucketConfig;",
+      "field": "scheme",
+      "field_index": 24284,
+      "annotation_item_dex_offset": "0x348d5c",
+      "wire_name": "scheme"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse$BucketConfig;",
+      "field": "sk",
+      "field_index": 24285,
+      "annotation_item_dex_offset": "0x348d66",
+      "wire_name": "sk"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse$BucketConfig;",
+      "field": "token",
+      "field_index": 24286,
+      "annotation_item_dex_offset": "0x348d70",
+      "wire_name": "token"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse$BucketConfig;",
+      "field": "type",
+      "field_index": 24287,
+      "annotation_item_dex_offset": "0x348d7a",
+      "wire_name": "btype"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse$DataBean;",
+      "field": "bucketList",
+      "field_index": 24288,
+      "annotation_item_dex_offset": "0x348d9d",
+      "wire_name": "bucket"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse$DataBean;",
+      "field": "downloadConfig",
+      "field_index": 24289,
+      "annotation_item_dex_offset": "0x348db9",
+      "wire_name": "dlc"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse$DownloadConfig;",
+      "field": "concurrency",
+      "field_index": 24292,
+      "annotation_item_dex_offset": "0x348ded",
+      "wire_name": "concurrency"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse$DownloadConfig;",
+      "field": "rules",
+      "field_index": 24293,
+      "annotation_item_dex_offset": "0x348df7",
+      "wire_name": "rules"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse$DownloadRule;",
+      "field": "maxFiles",
+      "field_index": 24294,
+      "annotation_item_dex_offset": "0x348e4c",
+      "wire_name": "max_files"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse$DownloadRule;",
+      "field": "speed",
+      "field_index": 24295,
+      "annotation_item_dex_offset": "0x348e56",
+      "wire_name": "speed"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse;",
+      "field": "code",
+      "field_index": 24297,
+      "annotation_item_dex_offset": "0x348e6f",
+      "wire_name": "code"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse;",
+      "field": "data",
+      "field_index": 24298,
+      "annotation_item_dex_offset": "0x348bc5",
+      "wire_name": "data"
+    },
+    {
+      "dex": "classes9.dex",
+      "dex_sha256": "dc813b3c57acc7bafd11c288ae8c07dcfdf15575b5b6b175ffa3f1a70f4f4676",
+      "class": "Lcom/macrovideo/sdk/json/S3TokenJsonParse;",
+      "field": "msg",
+      "field_index": 24299,
+      "annotation_item_dex_offset": "0x348e79",
+      "wire_name": "msg"
+    },
+    {
+      "dex": "classes10.dex",
+      "dex_sha256": "e1a8fef2019d48e6e5ac057824fc8fba71a9eb471d72e544b61202204d4c26f8",
+      "class": "Lcom/macrovideo/v380pro/json/UCloudRecCatalogJsonParse$DataBean;",
+      "field": "channel",
+      "field_index": 41323,
+      "annotation_item_dex_offset": "0x3fc55e",
+      "wire_name": "channel"
+    },
+    {
+      "dex": "classes10.dex",
+      "dex_sha256": "e1a8fef2019d48e6e5ac057824fc8fba71a9eb471d72e544b61202204d4c26f8",
+      "class": "Lcom/macrovideo/v380pro/json/UCloudRecCatalogJsonParse$DataBean;",
+      "field": "date",
+      "field_index": 41324,
+      "annotation_item_dex_offset": "0x3fc568",
+      "wire_name": "date"
+    },
+    {
+      "dex": "classes10.dex",
+      "dex_sha256": "e1a8fef2019d48e6e5ac057824fc8fba71a9eb471d72e544b61202204d4c26f8",
+      "class": "Lcom/macrovideo/v380pro/json/UCloudRecCatalogJsonParse$DataBean;",
+      "field": "device_id",
+      "field_index": 41326,
+      "annotation_item_dex_offset": "0x3fc572",
+      "wire_name": "device_id"
+    },
+    {
+      "dex": "classes10.dex",
+      "dex_sha256": "e1a8fef2019d48e6e5ac057824fc8fba71a9eb471d72e544b61202204d4c26f8",
+      "class": "Lcom/macrovideo/v380pro/json/UCloudRecCatalogJsonParse$DataBean;",
+      "field": "id",
+      "field_index": 41327,
+      "annotation_item_dex_offset": "0x3fc57c",
+      "wire_name": "id"
+    },
+    {
+      "dex": "classes10.dex",
+      "dex_sha256": "e1a8fef2019d48e6e5ac057824fc8fba71a9eb471d72e544b61202204d4c26f8",
+      "class": "Lcom/macrovideo/v380pro/json/UCloudRecCatalogJsonParse$DataBean;",
+      "field": "type",
+      "field_index": 41328,
+      "annotation_item_dex_offset": "0x3fc586",
+      "wire_name": "type"
+    }
+  ]
+}

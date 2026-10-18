@@ -1,0 +1,241 @@
+{
+  "dex_sha256": "e1a8fef2019d48e6e5ac057824fc8fba71a9eb471d72e544b61202204d4c26f8",
+  "classes": [
+    {
+      "class": "Lcom/macrovideo/v380pro/json/LoginJsonParse$DataBean;",
+      "fields": [
+        {
+          "field": "access_token",
+          "wire_name": "access_token"
+        },
+        {
+          "field": "ecs_ip",
+          "wire_name": "ecs_ip"
+        },
+        {
+          "field": "ecs_ip2",
+          "wire_name": "ecs_ip2"
+        },
+        {
+          "field": "ecs_port",
+          "wire_name": "ecs_port"
+        },
+        {
+          "field": "ecs_port2",
+          "wire_name": "ecs_port2"
+        },
+        {
+          "field": "is_open_service",
+          "wire_name": "is_open_service"
+        },
+        {
+          "field": "user_id",
+          "wire_name": "user_id"
+        },
+        {
+          "field": "username",
+          "wire_name": "username"
+        }
+      ]
+    },
+    {
+      "class": "Lcom/macrovideo/v380pro/json/LoginJsonParse;",
+      "fields": [
+        {
+          "field": "data",
+          "wire_name": "data"
+        },
+        {
+          "field": "error_code",
+          "wire_name": "error_code"
+        },
+        {
+          "field": "expire",
+          "wire_name": "expire"
+        },
+        {
+          "field": "register_time",
+          "wire_name": "register_time"
+        },
+        {
+          "field": "remaining_time",
+          "wire_name": "remaining_time"
+        },
+        {
+          "field": "result",
+          "wire_name": "result"
+        },
+        {
+          "field": "user_position",
+          "wire_name": "user_position"
+        }
+      ]
+    },
+    {
+      "class": "Lcom/macrovideo/v380pro/json/UserDeivceListJsonParse$DataBean;",
+      "fields": [
+        {
+          "field": "device_account",
+          "wire_name": "device_account"
+        },
+        {
+          "field": "device_id",
+          "wire_name": "device_id"
+        },
+        {
+          "field": "device_model",
+          "wire_name": "device_model"
+        },
+        {
+          "field": "device_password",
+          "wire_name": "device_password"
+        },
+        {
+          "field": "f_id",
+          "wire_name": "f_id"
+        },
+        {
+          "field": "group_id",
+          "wire_name": "group_id"
+        },
+        {
+          "field": "im_off",
+          "wire_name": "im_off"
+        },
+        {
+          "field": "ip",
+          "wire_name": "ip"
+        },
+        {
+          "field": "model",
+          "wire_name": "model"
+        },
+        {
+          "field": "mqsl",
+          "wire_name": "mqsl"
+        },
+        {
+          "field": "nickname",
+          "wire_name": "nickname"
+        },
+        {
+          "field": "p_id",
+          "wire_name": "p_id"
+        },
+        {
+          "field": "permission",
+          "wire_name": "permission"
+        },
+        {
+          "field": "public_key",
+          "wire_name": "public_key"
+        },
+        {
+          "field": "pver",
+          "wire_name": "pver"
+        },
+        {
+          "field": "rand_key",
+          "wire_name": "rand_key"
+        },
+        {
+          "field": "rk",
+          "wire_name": "rk"
+        },
+        {
+          "field": "service_id",
+          "wire_name": "service_id"
+        },
+        {
+          "field": "sort",
+          "wire_name": "sort"
+        },
+        {
+          "field": "sub_server",
+          "wire_name": "sub_server"
+        },
+        {
+          "field": "tlv_type",
+          "wire_name": "tlv_type"
+        },
+        {
+          "field": "type",
+          "wire_name": "type"
+        },
+        {
+          "field": "ver",
+          "wire_name": "ver"
+        }
+      ]
+    },
+    {
+      "class": "Lcom/macrovideo/v380pro/json/UserDeivceListJsonParse;",
+      "fields": [
+        {
+          "field": "cascade",
+          "wire_name": "cascade"
+        },
+        {
+          "field": "cloud",
+          "wire_name": "cloud"
+        },
+        {
+          "field": "data",
+          "wire_name": "data"
+        },
+        {
+          "field": "data_bind",
+          "wire_name": "data_bind"
+        },
+        {
+          "field": "data_share",
+          "wire_name": "data_share"
+        },
+        {
+          "field": "error_code",
+          "wire_name": "error_code"
+        },
+        {
+          "field": "mqtt",
+          "wire_name": "mqtt"
+        },
+        {
+          "field": "n_off",
+          "wire_name": "n_off"
+        },
+        {
+          "field": "o_off",
+          "wire_name": "o_off"
+        },
+        {
+          "field": "opinion_switch",
+          "wire_name": "opinion_switch"
+        },
+        {
+          "field": "renew_token",
+          "wire_name": "renew_token"
+        },
+        {
+          "field": "result",
+          "wire_name": "result"
+        },
+        {
+          "field": "serve",
+          "wire_name": "serve"
+        },
+        {
+          "field": "set_username",
+          "wire_name": "set_username"
+        },
+        {
+          "field": "user_id",
+          "wire_name": "user_id"
+        },
+        {
+          "field": "wx_mark",
+          "wire_name": "wx_mark"
+        }
+      ]
+    }
+  ]
+}

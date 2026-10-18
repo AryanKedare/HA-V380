@@ -1,0 +1,89 @@
+{
+  "title": "V380 Cloud (Experimental)",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect V380 Cloud",
+        "description": "Enter your V380 Pro cloud account credentials. Cloud protocol support is experimental. Camera credentials used for a local connection are different from cloud account credentials.",
+        "data": {
+          "username": "Cloud account",
+          "password": "Cloud account password",
+          "allow_insecure_http": "Allow unencrypted legacy cloud recording access"
+        },
+        "data_description": {
+          "username": "The account used to sign in to V380 Pro.",
+          "password": "The password used to sign in to that cloud account.",
+          "allow_insecure_http": "Off by default. Some legacy V380 recording services require HTTP. Enabling this can send cloud credentials or tokens unencrypted to the vendor."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reconnect V380 Cloud",
+        "description": "Sign in again to the same V380 cloud account.",
+        "data": {
+          "username": "Cloud account",
+          "password": "Cloud account password",
+          "allow_insecure_http": "Allow unencrypted legacy cloud recording access"
+        },
+        "data_description": {
+          "username": "The existing V380 Pro cloud account.",
+          "password": "The current cloud account password.",
+          "allow_insecure_http": "Off by default. Some legacy V380 recording services require HTTP. Enabling this can send cloud credentials or tokens unencrypted to the vendor."
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure V380 Cloud",
+        "description": "Sign in to the same account and update the optional legacy HTTP setting.",
+        "data": {
+          "username": "Cloud account",
+          "password": "Cloud account password",
+          "allow_insecure_http": "Allow unencrypted legacy cloud recording access"
+        },
+        "data_description": {
+          "username": "The existing V380 Pro cloud account.",
+          "password": "The current cloud account password.",
+          "allow_insecure_http": "Off by default. Some legacy V380 recording services require HTTP. Enabling this can send cloud credentials or tokens unencrypted to the vendor."
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "The cloud account or password was rejected.",
+      "cannot_connect": "Unable to connect to V380 Cloud. Check your internet connection and try again.",
+      "unsupported_protocol": "This cloud account uses a protocol this experimental integration cannot yet support."
+    },
+    "abort": {
+      "already_configured": "This cloud account is already configured.",
+      "reauth_successful": "Cloud account authentication was updated.",
+      "wrong_account": "Sign in to the same cloud account that was originally configured.",
+      "reconfigure_successful": "Cloud account settings were updated."
+    }
+  },
+  "exceptions": {
+    "invalid_auth": {
+      "message": "V380 cloud authentication expired or was rejected. Reauthenticate the integration."
+    },
+    "account_mismatch": {
+      "message": "The credentials belong to a different V380 cloud account. Reauthenticate using the original account."
+    },
+    "cloud_unavailable": {
+      "message": "V380 Cloud is unavailable or returned an invalid response."
+    },
+    "unsupported_live": {
+      "message": "Live cloud video uses a transport this experimental integration cannot yet play."
+    },
+    "unsupported_recordings": {
+      "message": "This cloud recording format or API is not yet supported by the experimental integration."
+    },
+    "account_unavailable": {
+      "message": "This V380 cloud account is not currently loaded."
+    },
+    "invalid_media": {
+      "message": "The selected V380 recording or camera identifier is invalid."
+    },
+    "recording_missing": {
+      "message": "The selected cloud recording is no longer available."
+    },
+    "legacy_http_required": {
+      "message": "V380 supplied an unencrypted recording endpoint. To permit its use, reconfigure this integration and enable legacy HTTP recording access."
+    }
+  }
+}
