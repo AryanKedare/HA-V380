@@ -81,10 +81,13 @@ def dispatch_request(device_id: int, zone: str, random_key: bytes) -> bytes:
 
 def parse_dispatch(data: bytes) -> list[str]:
     if len(data) != 64 or struct.unpack_from("<H", data)[0] != 200:
-        raise CloudError("The cloud dispatcher rejected the routing request")
+        code = struct.unpack_from("<H", data)[0] if len(data) >= 2 else None
+        raise CloudError("The cloud dispatcher rejected the routing request",
+                         stage="dispatcher_response", reason="dispatcher_rejected", code=code)
     normal, pano = data[6], data[7]
     if normal + pano > 14 or not normal + pano:
-        raise CloudError("The cloud dispatcher returned no usable relays")
+        raise CloudError("The cloud dispatcher returned no usable relays",
+                         stage="dispatcher_response", reason="no_relays")
     # Normal servers are first; panoramic devices can use the second group.
     return [socket.inet_ntoa(data[8 + index * 4:12 + index * 4]) for index in range(normal + pano)]
 
@@ -163,7 +166,8 @@ class FrameDecoder:
             payload = decrypt_media(payload, self.key, audio=codec == "aac", first_2k=self.media_version == 21)
         keyframe = frame_type in (0, 40, 50, 52)
         if keyframe and not payload.startswith((b"\x00\x00\x01", b"\x00\x00\x00\x01")):
-            raise CloudError("The cloud video key did not produce a valid Annex B frame")
+            raise CloudError("The cloud video key did not produce a valid Annex B frame",
+                             stage="media_stream", reason="video_key_invalid")
         return Frame(payload, codec, timestamp, keyframe, sequence)
 
 
@@ -218,14 +222,16 @@ class CloudLiveClient:
     async def async_relays(self) -> list[str]:
         """Ask the app's dispatcher for cloud relays; never probe the LAN."""
         writer = None
+        stage = "dispatcher_connect"
         try:
             reader, writer = await self._open(self.dispatch_server, self.dispatch_port)
+            stage = "dispatcher_response"
             random_key = self._random_key()
             writer.write(dispatch_request(self.device_id, self.zone, random_key))
             await writer.drain()
             return parse_dispatch(await self._read(reader, 64))
         except (OSError, TimeoutError, asyncio.IncompleteReadError) as err:
-            raise CloudError("The V380 cloud dispatcher could not be reached") from err
+            raise self._transport_error(err, stage) from err
         finally:
             if writer is not None:
                 await self._close(writer)
@@ -235,9 +241,30 @@ class CloudLiveClient:
         alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
         return "".join(secrets.choice(alphabet) for _ in range(16)).encode("ascii")
 
+    @staticmethod
+    def _transport_error(err: Exception, stage: str) -> CloudError:
+        if isinstance(err, CloudError) and err.diagnostic:
+            return err
+        if isinstance(err, socket.gaierror):
+            reason = "dns_failed"
+        elif isinstance(err, TimeoutError):
+            reason = "network_timeout"
+        elif isinstance(err, asyncio.IncompleteReadError):
+            reason = "incomplete_response"
+        elif isinstance(err, OSError):
+            reason = "connection_failed"
+        elif stage == "media_stream":
+            reason = "media_packet_invalid"
+        else:
+            reason = "session_failed"
+        return CloudError("The V380 cloud video request failed", stage=stage, reason=reason)
+
     async def _login(self, host: str) -> dict[str, Any]:
-        reader, writer = await self._open(host, self.login_port)
+        writer = None
+        stage = "device_login_connect"
         try:
+            reader, writer = await self._open(host, self.login_port)
+            stage = "device_login_response"
             random_key = self._random_key()
             request_id = secrets.randbelow(99999999) + 100
             payload = {
@@ -266,39 +293,49 @@ class CloudLiveClient:
             header = await self._read(reader, 8)
             magic, length = struct.unpack("<II", header)
             if magic != RPC_MAGIC or not 0 < length <= MAX_JSON:
-                raise CloudError("Invalid cloud login response framing")
+                raise CloudError("Invalid cloud login response framing", stage=stage, reason="invalid_framing")
             try:
                 response = json.loads(await self._read(reader, length))
             except (ValueError, UnicodeError) as err:
-                raise CloudError("Invalid cloud login response") from err
+                raise CloudError("Invalid cloud login response", stage=stage, reason="invalid_json") from err
             if not isinstance(response, dict) or response.get("id") != request_id:
-                raise CloudError("The cloud login response does not match this request")
+                raise CloudError("The cloud login response does not match this request", stage=stage, reason="request_mismatch")
             result = response.get("result") or {}
             if not isinstance(result, dict):
-                raise CloudError("The cloud login result is invalid")
+                raise CloudError("The cloud login result is invalid", stage=stage, reason="invalid_result")
             if result.get("code") != 1001:
                 if result.get("code") in (1011, 1012):
-                    raise AuthError("The cloud camera rejected its device credentials")
-                raise CloudError("The camera cloud login failed")
+                    raise AuthError("The cloud camera rejected its device credentials", stage=stage,
+                                    reason="login_rejected", code=result.get("code"), error_id=result.get("errorId"))
+                raise CloudError("The camera cloud login failed", stage=stage, reason="login_rejected",
+                                 code=result.get("code"), error_id=result.get("errorId"))
             info = response.get("v380")
             if not isinstance(info, dict) or "handle" not in info or "session" not in info:
-                raise CloudError("The cloud login did not return a video session")
+                raise CloudError("The cloud login did not return a video session", stage=stage, reason="missing_session")
             if int(info.get("version", 0)) < 21:
-                raise UnsupportedError("This camera's old media framing is not supported")
+                raise UnsupportedError("This camera's old media framing is not supported", stage=stage,
+                                       reason="media_version_unsupported", protocol_version=int(info.get("version", 0)))
             return info
+        except (OSError, TimeoutError, asyncio.IncompleteReadError) as err:
+            raise self._transport_error(err, stage) from err
         finally:
-            await self._close(writer)
+            if writer is not None:
+                await self._close(writer)
 
     async def async_frames(self) -> AsyncIterator[Frame]:
         """Yield decrypted compressed frames over a source-backed cloud relay."""
         relays = await self.async_relays()
         last_error: Exception | None = None
+        attempts: list[dict[str, Any]] = []
         for host in relays:
             emitted = False
+            stage = "device_login_connect"
             try:
                 login = await self._login(host)
+                stage = "relay_connect"
                 reader, writer = await self._open(host, self.relay_port)
                 self._writer = writer
+                stage = "relay_handshake"
                 handle, session = int(login["handle"]), int(login["session"])
                 writer.write(relay_request(self.device_id, self.domain, self.camera_port, handle, session, audio=self.audio))
                 await writer.drain()
@@ -306,15 +343,18 @@ class CloudLiveClient:
                 command, result, _status = struct.unpack_from("<III", response)
                 media_version = response[12]
                 if command != 401 or result != 1001:
-                    raise CloudError("The cloud relay rejected the video session")
+                    raise CloudError("The cloud relay rejected the video session", stage=stage,
+                                     reason="relay_rejected", code=result)
                 if media_version < 21:
-                    raise UnsupportedError("This camera's old media framing is not supported")
+                    raise UnsupportedError("This camera's old media framing is not supported", stage=stage,
+                                           reason="media_version_unsupported", protocol_version=media_version)
                 # SDK V2 expects 256 bytes of login response for v21+ devices.
                 await self._read(reader, 224)
                 start = struct.pack("<II", 303, 0x3001).ljust(256, b"\x00")
                 writer.write(start)
                 await writer.drain()
                 decoder = FrameDecoder(handle, int(login.get("version", 31)), media_version)
+                stage = "media_stream"
                 received_fragments = 0
                 last_ack = asyncio.get_running_loop().time()
                 while True:
@@ -340,27 +380,37 @@ class CloudLiveClient:
                         length = struct.unpack_from("<H", header, 2)[0]
                         await self._read(reader, length)
                         if header[1] < 20:
-                            raise UnsupportedError("This camera selected an old media frame format")
+                            raise UnsupportedError("This camera selected an old media frame format", stage=stage,
+                                                   reason="media_version_unsupported", protocol_version=header[1])
                         decoder.media_version = header[1]
                     elif marker == 0x1F:
                         if header[5] < 20:
-                            raise UnsupportedError("This camera selected an old media frame format")
+                            raise UnsupportedError("This camera selected an old media frame format", stage=stage,
+                                                   reason="media_version_unsupported", protocol_version=header[5])
                         decoder.media_version = header[5]
                     elif marker not in (0x3F, 0x4F, 0x5F, 0x6F):
-                        raise UnsupportedError("The cloud relay sent an unsupported media packet")
+                        raise UnsupportedError("The cloud relay sent an unsupported media packet", stage=stage,
+                                               reason="packet_type_unsupported", packet_type=marker)
             except AuthError:
                 raise
             except UnsupportedError:
                 raise
             except (CloudError, OSError, TimeoutError, asyncio.IncompleteReadError, ValueError, TypeError) as err:
+                detail = self._transport_error(err, stage)
+                attempts.append(dict(detail.diagnostic))
+                detail.relay_attempts = attempts[-14:]
                 if emitted:
-                    raise CloudError("The cloud video session ended") from err
-                last_error = err
+                    if detail is err:
+                        raise
+                    raise detail from err
+                last_error = detail
             finally:
                 if self._writer is not None:
                     await self._close(self._writer)
                     self._writer = None
-        raise CloudError("No V380 cloud relay could start this camera") from last_error
+        if last_error is not None:
+            raise last_error
+        raise CloudError("No V380 cloud relay could start this camera")
 
     async def async_close(self) -> None:
         if self._writer is not None:

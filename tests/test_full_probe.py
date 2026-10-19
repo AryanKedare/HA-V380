@@ -148,7 +148,8 @@ def test_no_false_pass_when_checks_missing_or_blocked():
     assert 'secret' not in json.dumps(result) and result['vendor_codes'] == [123]
 
 
-def test_optional_home_assistant_api_and_media_workflow():
+@pytest.mark.parametrize("live_only", [False, True])
+def test_optional_home_assistant_api_and_media_workflow(live_only):
     async def run():
         ts = sample_ts()
         class WebSocket:
@@ -163,6 +164,7 @@ def test_optional_home_assistant_api_and_media_workflow():
                     value=[{'entity_id':'camera.private_name','platform':'v380_cloud','disabled_by':None}]
                 elif kind=='camera/stream': value={'url':'/stream.m3u8'}
                 elif kind=='media_source/browse_media':
+                    assert not live_only, 'Live-only run must never browse recordings'
                     level=message['media_content_id'].count('/')-2
                     if level>=3: value={'children':[{'can_play':True,'media_content_id':'private-clip-id'}]}
                     else:value={'children':[{'can_play':False,'media_content_id':message['media_content_id']+'/next'}]}
@@ -182,14 +184,63 @@ def test_optional_home_assistant_api_and_media_workflow():
             'https://ha.example/stream.ts':FakeResponse(ts),
             'https://ha.example/private-recording.ts?authSig=fixture-signature':FakeResponse(ts),
         })
-        args=SimpleNamespace(ha_url='https://ha.example',max_bytes=1000000)
+        args=SimpleNamespace(ha_url='https://ha.example',max_bytes=1000000,live_only=live_only)
         with patch.object(probe.getpass,'getpass',return_value='private-ha-token'):
             result=await probe.homeassistant_check(session,args)
         assert result['status']=='pass' and result['camera_count']==1
-        assert result['recording']['decoded_frames']==12
+        if live_only:
+            assert result['recording']=={'status':'not_requested'}
+        else:
+            assert result['recording']['decoded_frames']==12
         assert ws.closed
         for private in ('private-ha-token','fixture-signature','private_name','private-clip-id'):
             assert private not in json.dumps(result)
+    asyncio.run(run())
+
+
+def test_detailed_errors_are_bounded_sanitized_and_survive_wrapping(capsys):
+    p = probe.load_protocol()
+    cause = p.errors.CloudError('private URL https://private.example/?token=secret',
+        stage='device_login_response', reason='login_rejected', code=1000, error_id=-2)
+    wrapper = p.errors.CloudError('All relay attempts failed')
+    cause.relay_attempts=[dict(cause.diagnostic)] * 20
+    wrapper.__cause__ = cause
+    report = probe.failure(wrapper)
+    assert report['stage']=='device_login_response'
+    assert report['detail']=='login_rejected'
+    assert report['code']==1000 and report['error_id']==-2
+    assert report['relay_attempts']==[cause.diagnostic] * 14
+    assert 'secret' not in json.dumps(report) and 'private.example' not in json.dumps(report)
+    probe.log('Live',report)
+    assert 'device_login_response; login_rejected; code=1000; error_id=-2' in capsys.readouterr().out
+    invalid = p.errors.CloudError('secret', stage='private-camera-name', reason='secret-token',
+                                 code=987654321, error_id='secret', protocol_version=True)
+    assert invalid.diagnostic=={}
+
+
+def test_cloud_live_only_does_not_query_recordings_or_include_them_in_pass(tmp_path):
+    async def run():
+        p=probe.load_protocol()
+        class Account:
+            def __init__(self,*args): pass
+            async def async_login(self): return 'private-account'
+            async def async_devices(self): return [p.account.CloudDevice('42','private-camera',metadata={'type':0})]
+            async def async_close(self): pass
+        async def passed(*args): return {'status':'pass','decoded_frames':12}
+        async def forbidden(*args): raise AssertionError('Recording check was requested in live-only mode')
+        args=probe.parser().parse_args(['--live-only','--report',str(tmp_path/'report.json')])
+        args.max_bytes=32*1024*1024
+        with patch.object(p.account,'AccountClient',Account), patch.object(probe,'live_check',side_effect=passed), \
+             patch.object(probe,'recording_check',side_effect=forbidden) as recordings, \
+             patch('builtins.input',return_value='private-email'),patch.object(probe.getpass,'getpass',return_value='secret'):
+            assert await probe.run(args)==0
+            recordings.assert_not_called()
+        report=json.loads(args.report.read_text())
+        assert report['script_version']=='1.1.0'
+        assert report['scope']['cloud_recordings']=='not_requested'
+        assert report['cameras'][0]['recordings']=={'status':'not_requested'}
+        assert all(item['status']=='pass' for item in report['checks'])
+        assert report['overall']=='pass'
     asyncio.run(run())
 
 

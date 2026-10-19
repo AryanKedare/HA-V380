@@ -1,4 +1,4 @@
-# V380 Cloud for Home Assistant — experimental 0.1.0
+# V380 Cloud for Home Assistant — experimental 0.1.1
 
 A custom Home Assistant integration built from static analysis of the supplied
 V380 Pro **2.2.90** APKs. It signs in to the V380 cloud account, creates camera
@@ -45,6 +45,11 @@ python3 -m venv .venv
 .venv/bin/python v380_full_test.py --self-test
 .venv/bin/python v380_full_test.py
 ```
+
+If the camera has no cloud recordings, use
+`.venv/bin/python v380_full_test.py --live-only`. Version 1.1.0 of the tester
+reports the failed live-protocol stage and bounded server result codes instead
+of losing these details behind a generic relay error.
 
 Credentials are prompted locally. The default report contains sanitized results;
 footage is saved only when `--save-media` is supplied. The script reports newer,

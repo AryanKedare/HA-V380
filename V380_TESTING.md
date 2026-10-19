@@ -1,6 +1,6 @@
 # Test V380 cloud video and the installed Home Assistant integration
 
-Download **v380_full_test.py**. It is a standalone script; the integration ZIP
+Download **v380_full_test.py** (tester version **1.1.0**). It is a standalone script; the integration ZIP
 is not needed on the computer running it. Use Python3.11 or newer and an
 interactive terminal. Passwords and the optional Home Assistant token are
 prompted locally, without echo or command-line arguments.
@@ -31,6 +31,26 @@ tests every discovered camera in sequence:
    sample. FFmpeg/PyAV must actually decode video frames for this check to pass.
 3. Cloud recording dates and files; the newest recording on the newest date.
 4. UCloud MP4 download/decode, or up to3 S3 segments downloaded and decoded.
+
+If V380 Pro offers live video but no saved cloud footage for this camera, run:
+
+```sh
+python v380_full_test.py --live-only
+```
+
+This skips cloud-recording requests in both direct-cloud and Home Assistant
+checks. The report marks recordings `not_requested`; a live-only PASS covers
+only login, discovery and the requested live samples.
+
+When live video fails, version 1.1.0 retains a fixed protocol `stage` and
+`detail`, plus bounded numeric `code`/`error_id` values when returned by the
+service. For example, `device_login_response; login_rejected; code=1000` identifies
+the device-login response rather than the account login. Dispatcher, login,
+relay-handshake and media failures are distinguished. These fields contain no
+camera IDs, endpoints, session handles, credentials or raw response text.
+The report retains up to 14 relay-attempt summaries, so a later connection
+failure does not hide an earlier server rejection.
+Share the new failure line and sanitized report to locate the remaining issue.
 
 The decoder checks up to300 frames per sample. Each live/recording sample is capped at32MiB. A larger required download is
 reported as incomplete rather than a playback failure or a pass.
@@ -117,8 +137,9 @@ reported as unsupported, even when their saved recordings work.
 
 ## Development verification
 
-Nine offline diagnostic tests pass, covering real video decoding, download/error
+Twelve offline diagnostic tests pass, covering real video decoding, download/error
 bounds, relative and low-latency HLS objects, mocked HA REST/WebSocket workflows,
-cross-origin token protection, report privacy and honest incomplete statuses.
+cross-origin token protection, report privacy, preserved protocol errors,
+live-only selection and honest incomplete statuses.
 The distributable's embedded self-test also passes with exit0. No real V380
 account/camera or installed user Home Assistant was accessed during development.

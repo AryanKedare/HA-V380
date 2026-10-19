@@ -109,7 +109,8 @@ def device_password(metadata: dict[str, Any]) -> str:
             raw = unpadder.update(padded) + unpadder.finalize()
         return raw.decode("utf-8")
     except (ValueError, TypeError, UnicodeError) as err:
-        raise CloudError("Camera credential encoding is unsupported") from err
+        raise CloudError("Camera credential encoding is unsupported",
+                         stage="device_credentials", reason="invalid_metadata") from err
 
 
 class AccountClient:

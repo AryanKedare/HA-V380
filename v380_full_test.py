@@ -19,6 +19,42 @@ _EMBEDDED_PROTOCOL = {
         'class CloudError(Exception):\n'
         '    """V380 service request failed or returned an unsupported response."""\n'
         '\n'
+        '    _STAGES = frozenset({\n'
+        '        "device_credentials", "dispatcher_connect", "dispatcher_response",\n'
+        '        "device_login_connect", "device_login_response", "relay_connect",\n'
+        '        "relay_handshake", "media_stream",\n'
+        '    })\n'
+        '    _REASONS = frozenset({\n'
+        '        "dns_failed", "connection_failed", "network_timeout", "incomplete_response",\n'
+        '        "dispatcher_rejected", "no_relays", "invalid_framing", "invalid_json",\n'
+        '        "request_mismatch", "invalid_result", "login_rejected", "missing_session",\n'
+        '        "media_version_unsupported", "relay_rejected", "media_packet_invalid",\n'
+        '        "video_key_invalid", "packet_type_unsupported", "invalid_metadata",\n'
+        '        "session_failed",\n'
+        '    })\n'
+        '\n'
+        '    def __init__(self, message: str = "Cloud service request failed", *, stage: str | None = None,\n'
+        '                 reason: str | None = None, code: int | None = None,\n'
+        '                 error_id: int | None = None, protocol_version: int | None = None,\n'
+        '                 packet_type: int | None = None) -> None:\n'
+        '        super().__init__(message)\n'
+        '        # Only fixed enums and bounded protocol numbers may enter a report.\n'
+        '        # Messages, endpoints, handles, sessions and device IDs never do.\n'
+        '        self.diagnostic = {}\n'
+        '        self.relay_attempts: list[dict] = []\n'
+        '        if stage in self._STAGES:\n'
+        '            self.diagnostic["stage"] = stage\n'
+        '        if reason in self._REASONS:\n'
+        '            self.diagnostic["detail"] = reason\n'
+        '        for name, value, low, high in (\n'
+        '            ("code", code, -65535, 65535),\n'
+        '            ("error_id", error_id, -65535, 65535),\n'
+        '            ("protocol_version", protocol_version, 0, 255),\n'
+        '            ("packet_type", packet_type, 0, 255),\n'
+        '        ):\n'
+        '            if type(value) is int and low <= value <= high:\n'
+        '                self.diagnostic[name] = value\n'
+        '\n'
         'class AuthError(CloudError):\n'
         '    """Account authentication expired or was rejected."""\n'
         '\n'
@@ -208,7 +244,8 @@ _EMBEDDED_PROTOCOL = {
         '            raw = unpadder.update(padded) + unpadder.finalize()\n'
         '        return raw.decode("utf-8")\n'
         '    except (ValueError, TypeError, UnicodeError) as err:\n'
-        '        raise CloudError("Camera credential encoding is unsupported") from err\n'
+        '        raise CloudError("Camera credential encoding is unsupported",\n'
+        '                         stage="device_credentials", reason="invalid_metadata") from err\n'
         '\n'
         '\n'
         'class AccountClient:\n'
@@ -446,10 +483,13 @@ _EMBEDDED_PROTOCOL = {
         '\n'
         'def parse_dispatch(data: bytes) -> list[str]:\n'
         '    if len(data) != 64 or struct.unpack_from("<H", data)[0] != 200:\n'
-        '        raise CloudError("The cloud dispatcher rejected the routing request")\n'
+        '        code = struct.unpack_from("<H", data)[0] if len(data) >= 2 else None\n'
+        '        raise CloudError("The cloud dispatcher rejected the routing request",\n'
+        '                         stage="dispatcher_response", reason="dispatcher_rejected", code=code)\n'
         '    normal, pano = data[6], data[7]\n'
         '    if normal + pano > 14 or not normal + pano:\n'
-        '        raise CloudError("The cloud dispatcher returned no usable relays")\n'
+        '        raise CloudError("The cloud dispatcher returned no usable relays",\n'
+        '                         stage="dispatcher_response", reason="no_relays")\n'
         '    # Normal servers are first; panoramic devices can use the second group.\n'
         '    return [socket.inet_ntoa(data[8 + index * 4:12 + index * 4]) for index in range(normal + pano)]\n'
         '\n'
@@ -528,7 +568,8 @@ _EMBEDDED_PROTOCOL = {
         '            payload = decrypt_media(payload, self.key, audio=codec == "aac", first_2k=self.media_version == 21)\n'
         '        keyframe = frame_type in (0, 40, 50, 52)\n'
         '        if keyframe and not payload.startswith((b"\\x00\\x00\\x01", b"\\x00\\x00\\x00\\x01")):\n'
-        '            raise CloudError("The cloud video key did not produce a valid Annex B frame")\n'
+        '            raise CloudError("The cloud video key did not produce a valid Annex B frame",\n'
+        '                             stage="media_stream", reason="video_key_invalid")\n'
         '        return Frame(payload, codec, timestamp, keyframe, sequence)\n'
         '\n'
         '\n'
@@ -583,14 +624,16 @@ _EMBEDDED_PROTOCOL = {
         '    async def async_relays(self) -> list[str]:\n'
         '        """Ask the app\'s dispatcher for cloud relays; never probe the LAN."""\n'
         '        writer = None\n'
+        '        stage = "dispatcher_connect"\n'
         '        try:\n'
         '            reader, writer = await self._open(self.dispatch_server, self.dispatch_port)\n'
+        '            stage = "dispatcher_response"\n'
         '            random_key = self._random_key()\n'
         '            writer.write(dispatch_request(self.device_id, self.zone, random_key))\n'
         '            await writer.drain()\n'
         '            return parse_dispatch(await self._read(reader, 64))\n'
         '        except (OSError, TimeoutError, asyncio.IncompleteReadError) as err:\n'
-        '            raise CloudError("The V380 cloud dispatcher could not be reached") from err\n'
+        '            raise self._transport_error(err, stage) from err\n'
         '        finally:\n'
         '            if writer is not None:\n'
         '                await self._close(writer)\n'
@@ -600,9 +643,30 @@ _EMBEDDED_PROTOCOL = {
         '        alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"\n'
         '        return "".join(secrets.choice(alphabet) for _ in range(16)).encode("ascii")\n'
         '\n'
+        '    @staticmethod\n'
+        '    def _transport_error(err: Exception, stage: str) -> CloudError:\n'
+        '        if isinstance(err, CloudError) and err.diagnostic:\n'
+        '            return err\n'
+        '        if isinstance(err, socket.gaierror):\n'
+        '            reason = "dns_failed"\n'
+        '        elif isinstance(err, TimeoutError):\n'
+        '            reason = "network_timeout"\n'
+        '        elif isinstance(err, asyncio.IncompleteReadError):\n'
+        '            reason = "incomplete_response"\n'
+        '        elif isinstance(err, OSError):\n'
+        '            reason = "connection_failed"\n'
+        '        elif stage == "media_stream":\n'
+        '            reason = "media_packet_invalid"\n'
+        '        else:\n'
+        '            reason = "session_failed"\n'
+        '        return CloudError("The V380 cloud video request failed", stage=stage, reason=reason)\n'
+        '\n'
         '    async def _login(self, host: str) -> dict[str, Any]:\n'
-        '        reader, writer = await self._open(host, self.login_port)\n'
+        '        writer = None\n'
+        '        stage = "device_login_connect"\n'
         '        try:\n'
+        '            reader, writer = await self._open(host, self.login_port)\n'
+        '            stage = "device_login_response"\n'
         '            random_key = self._random_key()\n'
         '            request_id = secrets.randbelow(99999999) + 100\n'
         '            payload = {\n'
@@ -631,39 +695,49 @@ _EMBEDDED_PROTOCOL = {
         '            header = await self._read(reader, 8)\n'
         '            magic, length = struct.unpack("<II", header)\n'
         '            if magic != RPC_MAGIC or not 0 < length <= MAX_JSON:\n'
-        '                raise CloudError("Invalid cloud login response framing")\n'
+        '                raise CloudError("Invalid cloud login response framing", stage=stage, reason="invalid_framing")\n'
         '            try:\n'
         '                response = json.loads(await self._read(reader, length))\n'
         '            except (ValueError, UnicodeError) as err:\n'
-        '                raise CloudError("Invalid cloud login response") from err\n'
+        '                raise CloudError("Invalid cloud login response", stage=stage, reason="invalid_json") from err\n'
         '            if not isinstance(response, dict) or response.get("id") != request_id:\n'
-        '                raise CloudError("The cloud login response does not match this request")\n'
+        '                raise CloudError("The cloud login response does not match this request", stage=stage, reason="request_mismatch")\n'
         '            result = response.get("result") or {}\n'
         '            if not isinstance(result, dict):\n'
-        '                raise CloudError("The cloud login result is invalid")\n'
+        '                raise CloudError("The cloud login result is invalid", stage=stage, reason="invalid_result")\n'
         '            if result.get("code") != 1001:\n'
         '                if result.get("code") in (1011, 1012):\n'
-        '                    raise AuthError("The cloud camera rejected its device credentials")\n'
-        '                raise CloudError("The camera cloud login failed")\n'
+        '                    raise AuthError("The cloud camera rejected its device credentials", stage=stage,\n'
+        '                                    reason="login_rejected", code=result.get("code"), error_id=result.get("errorId"))\n'
+        '                raise CloudError("The camera cloud login failed", stage=stage, reason="login_rejected",\n'
+        '                                 code=result.get("code"), error_id=result.get("errorId"))\n'
         '            info = response.get("v380")\n'
         '            if not isinstance(info, dict) or "handle" not in info or "session" not in info:\n'
-        '                raise CloudError("The cloud login did not return a video session")\n'
+        '                raise CloudError("The cloud login did not return a video session", stage=stage, reason="missing_session")\n'
         '            if int(info.get("version", 0)) < 21:\n'
-        '                raise UnsupportedError("This camera\'s old media framing is not supported")\n'
+        '                raise UnsupportedError("This camera\'s old media framing is not supported", stage=stage,\n'
+        '                                       reason="media_version_unsupported", protocol_version=int(info.get("version", 0)))\n'
         '            return info\n'
+        '        except (OSError, TimeoutError, asyncio.IncompleteReadError) as err:\n'
+        '            raise self._transport_error(err, stage) from err\n'
         '        finally:\n'
-        '            await self._close(writer)\n'
+        '            if writer is not None:\n'
+        '                await self._close(writer)\n'
         '\n'
         '    async def async_frames(self) -> AsyncIterator[Frame]:\n'
         '        """Yield decrypted compressed frames over a source-backed cloud relay."""\n'
         '        relays = await self.async_relays()\n'
         '        last_error: Exception | None = None\n'
+        '        attempts: list[dict[str, Any]] = []\n'
         '        for host in relays:\n'
         '            emitted = False\n'
+        '            stage = "device_login_connect"\n'
         '            try:\n'
         '                login = await self._login(host)\n'
+        '                stage = "relay_connect"\n'
         '                reader, writer = await self._open(host, self.relay_port)\n'
         '                self._writer = writer\n'
+        '                stage = "relay_handshake"\n'
         '                handle, session = int(login["handle"]), int(login["session"])\n'
         '                writer.write(relay_request(self.device_id, self.domain, self.camera_port, handle, session, audio=self.audio))\n'
         '                await writer.drain()\n'
@@ -671,15 +745,18 @@ _EMBEDDED_PROTOCOL = {
         '                command, result, _status = struct.unpack_from("<III", response)\n'
         '                media_version = response[12]\n'
         '                if command != 401 or result != 1001:\n'
-        '                    raise CloudError("The cloud relay rejected the video session")\n'
+        '                    raise CloudError("The cloud relay rejected the video session", stage=stage,\n'
+        '                                     reason="relay_rejected", code=result)\n'
         '                if media_version < 21:\n'
-        '                    raise UnsupportedError("This camera\'s old media framing is not supported")\n'
+        '                    raise UnsupportedError("This camera\'s old media framing is not supported", stage=stage,\n'
+        '                                           reason="media_version_unsupported", protocol_version=media_version)\n'
         '                # SDK V2 expects 256 bytes of login response for v21+ devices.\n'
         '                await self._read(reader, 224)\n'
         '                start = struct.pack("<II", 303, 0x3001).ljust(256, b"\\x00")\n'
         '                writer.write(start)\n'
         '                await writer.drain()\n'
         '                decoder = FrameDecoder(handle, int(login.get("version", 31)), media_version)\n'
+        '                stage = "media_stream"\n'
         '                received_fragments = 0\n'
         '                last_ack = asyncio.get_running_loop().time()\n'
         '                while True:\n'
@@ -705,27 +782,37 @@ _EMBEDDED_PROTOCOL = {
         '                        length = struct.unpack_from("<H", header, 2)[0]\n'
         '                        await self._read(reader, length)\n'
         '                        if header[1] < 20:\n'
-        '                            raise UnsupportedError("This camera selected an old media frame format")\n'
+        '                            raise UnsupportedError("This camera selected an old media frame format", stage=stage,\n'
+        '                                                   reason="media_version_unsupported", protocol_version=header[1])\n'
         '                        decoder.media_version = header[1]\n'
         '                    elif marker == 0x1F:\n'
         '                        if header[5] < 20:\n'
-        '                            raise UnsupportedError("This camera selected an old media frame format")\n'
+        '                            raise UnsupportedError("This camera selected an old media frame format", stage=stage,\n'
+        '                                                   reason="media_version_unsupported", protocol_version=header[5])\n'
         '                        decoder.media_version = header[5]\n'
         '                    elif marker not in (0x3F, 0x4F, 0x5F, 0x6F):\n'
-        '                        raise UnsupportedError("The cloud relay sent an unsupported media packet")\n'
+        '                        raise UnsupportedError("The cloud relay sent an unsupported media packet", stage=stage,\n'
+        '                                               reason="packet_type_unsupported", packet_type=marker)\n'
         '            except AuthError:\n'
         '                raise\n'
         '            except UnsupportedError:\n'
         '                raise\n'
         '            except (CloudError, OSError, TimeoutError, asyncio.IncompleteReadError, ValueError, TypeError) as err:\n'
+        '                detail = self._transport_error(err, stage)\n'
+        '                attempts.append(dict(detail.diagnostic))\n'
+        '                detail.relay_attempts = attempts[-14:]\n'
         '                if emitted:\n'
-        '                    raise CloudError("The cloud video session ended") from err\n'
-        '                last_error = err\n'
+        '                    if detail is err:\n'
+        '                        raise\n'
+        '                    raise detail from err\n'
+        '                last_error = detail\n'
         '            finally:\n'
         '                if self._writer is not None:\n'
         '                    await self._close(self._writer)\n'
         '                    self._writer = None\n'
-        '        raise CloudError("No V380 cloud relay could start this camera") from last_error\n'
+        '        if last_error is not None:\n'
+        '            raise last_error\n'
+        '        raise CloudError("No V380 cloud relay could start this camera")\n'
         '\n'
         '    async def async_close(self) -> None:\n'
         '        if self._writer is not None:\n'
@@ -1349,7 +1436,7 @@ _EMBEDDED_PROTOCOL = {
     ),
 }
 
-_PROTOCOL_SOURCE_SHA256 = {'errors': '5b90ce98325faf9ace18d3519baa2361395a3f377c75b8b8b0c7bebc4259f13d', 'shared': '23eeebbb8422839d0fb26328a302d48a90aa34e4dffe0b4153db26989e74794e', 'account': '858b87bd4a7eb9f796984d6f19903782edf954165c5c402cd422e483b2ce3398', 'live': '14a676beb0d5c36c3a193bff88c4cff6dd2283fbb92d531adf358c48335d243b', 'mpegts': '5df2b4b70759cf278991d20c8ba3082b71eb3ac18d218350402dba4c81bfb59d', 'recordings': '3b30647f57ec2a1ff5756ee14d7a3f7ef1925c0b9a79d04882162e854daaa04f'}
+_PROTOCOL_SOURCE_SHA256 = {'errors': '497588dd0fcc37c737fd8a66ebf81277140931658f5c2ada2ed72cea9878181c', 'shared': '23eeebbb8422839d0fb26328a302d48a90aa34e4dffe0b4153db26989e74794e', 'account': '9af7c667a6b5d31b664c0ed25353b9d7e5a416a827b8041104d3851caa28a14f', 'live': '184438ff4f1ae074e1ce59417bd4cc79f826869eebf669803801b32555f88546', 'mpegts': '5df2b4b70759cf278991d20c8ba3082b71eb3ac18d218350402dba4c81bfb59d', 'recordings': '3b30647f57ec2a1ff5756ee14d7a3f7ef1925c0b9a79d04882162e854daaa04f'}
 _SELF_TEST_TS_B64 = 'R0AAMKYA////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////AACwDQABwQAAAAHwACqxBLJHUAAwoQD/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////AAKwEgABwQAA4QDwABvhAPAAFb1NVkdBADAHEAAAAAB+AAAAAeAAAICABSEAAQABAAAAAWdCwAraEJoQAAADABAAAAMDKPEiagAAAAFozg/IAAABBgX//0LcRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY1IC0gSC4yNjQvTVBFRy00IEFWQyBjb2RlYyAtIENvcHlsZWZ0IDIwMDMtMjAyNSAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQuaHRtbCAtIG9wdGlvRwEAEW5zOiBjYWJhYz0wIHJlZj0xIGRlYmxvY2s9MDowOjAgYW5hbHlzZT0wOjAgbWU9ZGlhIHN1Ym1lPTAgcHN5PTEgcHN5X3JkPTEuMDA6MC4wMCBtaXhlZF9yZWY9MCBtZV9yYW5nZT0xNiBjaHJvbWFfbWU9MSB0cmVsbGlzPTAgOHg4ZGN0PTAgY3FtPTAgZGVhZHpvbmU9MjEsMTEgZmFzdF9wc2tpcD0xIGNocm9tYV9xcF9vZmZHAQASc2V0PTAgdGhyZWFkcz0xIGxvb2thaGVhZF90aHJlYWRzPTEgc2xpY2VkX3RocmVhZHM9MCBucj0wIGRlY2ltYXRlPTEgaW50ZXJsYWNlZD0wIGJsdXJheV9jb21wYXQ9MCBjb25zdHJhaW5lZF9pbnRyYT0wIGJmcmFtZXM9MCB3ZWlnaHRwPTAga2V5aW50PTI1MCBrZXlpbnRfbWluPTI1IHNjZW5lY3V0PTAgaW50cmFfcmVmckcBADM9AP///////////////////////////////////////////////////////////////////////////////2VzaD0wIHJjPWNyZiBtYnRyZWU9MCBjcmY9MjMuMCBxY29tcD0wLjYwIHFwbWluPTAgcXBtYXg9NjkgcXBzdGVwPTQgaXBfcmF0aW89MS40MCBhcT0wAIAAAAFliIQ6EYoAAkqxwABEZjgACIzJycnXXXXXXXXXXXXgR0EAND4QAAAHCH4A/////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAARwhAAAAAUGaIDK8KRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUcAAQIo4AAgRYnxPifP5/P5/P5/P5/P5/P5/BHQQA1PhAAAA4QfgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQABOEEAAAABQZpAMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8EdBADY+EAAAFRh+AP////////////////////////////////////////////////////////////////////////8AAAHgAACAgAUhAAFUYQAAAAFBmmAyvCkUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFHAAECKOAAIEWJ8T4nz+fz+fz+fz+fz+fz+fwR0EANz4QAAAcIH4A/////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAAXCBAAAAAUGagDK8KRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUcAAQIo4AAgRYnxPifP5/P5/P5/P5/P5/P5/BHQQA4PhAAACMofgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQABjKEAAAABQZqgMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8EdBADk+EAAAKjB+AP////////////////////////////////////////////////////////////////////////8AAAHgAACAgAUhAAGowQAAAAFBmsAyvCkUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFHAAECKOAAIEWJ8T4nz+fz+fz+fz+fz+fz+fwR0EAOj4QAAAxOH4A/////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAAcThAAAAAUGa4DK8KRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUcAAQIo4AAgRYnxPifP5/P5/P5/P5/P5/P5/BHQQA7PhAAADhAfgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQAB4QEAAAABQZsAMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8EdBADw+EAAAP0h+AP////////////////////////////////////////////////////////////////////////8AAAHgAACAgAUhAAH9IQAAAAFBmyAyvCkUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFHAAECKOAAIEWJ8T4nz+fz+fz+fz+fz+fz+fwR0EAPT4QAABGUH4A/////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAAxlBAAAAAUGbQDK8KRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUcAAQIo4AAgRYnxPifP5/P5/P5/P5/P5/P5/BHQQA+PhAAAE1YfgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQADNWEAAAABQZtgMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8EdBAD+AEAAAVGB+AP////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////8AAAHgAACAgAUhAANRgQAAAAFBm4Ayo3FAAEFGOAAICscAAQFcT4nxPn8/n8/n8/n8/n8/n8/gR0EAMIYQAABbaH4A/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAA22hAAAAAUGboDKjcUAA1HAMcA4nxPifP5/P5/P5/P5/P5/P5/BHQQAxPhAAAGJwfgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQADicEAAAABQZvAMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8A=='
 _SELF_TEST_EXPECTED_FRAMES = 15
 
@@ -1420,7 +1507,7 @@ class CheckError(Exception):
         self.code, self.status, self.details = code, status, details
 
 
-def failure(exc):
+def _failure_category(exc):
     p = load_protocol()
     if isinstance(exc, CheckError):
         return {"status": exc.status, "reason": exc.code, **exc.details}
@@ -1446,8 +1533,26 @@ def failure(exc):
     return result
 
 
+def failure(exc):
+    result = _failure_category(exc)
+    current, seen = exc, set()
+    for _ in range(8):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        if isinstance(current, load_protocol().errors.CloudError) and current.diagnostic:
+            result.update(current.diagnostic)
+            if current.relay_attempts:
+                result["relay_attempts"] = current.relay_attempts[-14:]
+            break
+        current = current.__cause__
+    return result
+
+
 def log(label, result):
-    print(f"{label}: {result['status'].upper()}" + (f" ({result['reason']})" if "reason" in result else ""), flush=True)
+    details = [str(result[key]) for key in ("reason", "stage", "detail") if key in result]
+    details.extend(f"{key}={result[key]}" for key in ("code", "error_id", "protocol_version", "packet_type") if key in result)
+    print(f"{label}: {result['status'].upper()}" + (" (" + "; ".join(details) + ")" if details else ""), flush=True)
 
 
 def combine(results):
@@ -1760,6 +1865,10 @@ async def homeassistant_check(session, args):
                 item["live"] = failure(exc)
             result["checks"].append(item["live"])
             log(f"Home Assistant camera {index} live", item["live"])
+        if getattr(args, "live_only", False):
+            result["recording"] = {"status": "not_requested"}
+            result["status"] = combine(result["checks"])
+            return result
         try:
             identifier = "media-source://v380_cloud"
             for level in range(4):
@@ -1800,14 +1909,16 @@ async def homeassistant_check(session, args):
 
 async def run(args):
     p = load_protocol()
-    report = {"script_version": "1.0.0", "started_utc": datetime.now(timezone.utc).isoformat(),
+    report = {"script_version": "1.1.0", "started_utc": datetime.now(timezone.utc).isoformat(),
               "protocol_snapshot": globals().get("_PROTOCOL_SOURCE_SHA256", "source_tree"),
               "mode": "cloud_and_home_assistant" if args.ha_url and not args.ha_only else "home_assistant" if args.ha_only else "cloud",
-              "scope": {"cloud_live_sample_seconds": args.live_seconds, "recordings_per_camera": args.recordings_per_camera,
+              "scope": {"cloud_live_sample_seconds": args.live_seconds,
+                        "cloud_recordings": "not_requested" if args.live_only or args.ha_only else "requested",
+                        "recordings_per_camera": 0 if args.live_only else args.recordings_per_camera,
                         "segments_per_recording": args.segments_per_recording, "max_bytes_per_sample": args.max_bytes,
                         "browser_rendering": "not_tested", "all_historical_recordings": "not_tested", "decoder_frame_limit_per_sample": 300,
                         "home_assistant_api": "requested" if args.ha_url else "not_tested",
-                        "home_assistant_recording_scope": "representative_clip" if args.ha_url else "not_tested",
+                        "home_assistant_recording_scope": "representative_clip" if args.ha_url and not args.live_only else "not_tested",
                         "adapter_interpreter_shutdown": "not_tested"},
               "cameras": [], "checks": []}
     context = ssl.create_default_context(cafile=p.certifi.where())
@@ -1831,6 +1942,9 @@ async def run(args):
                             "platform": "new_key_exchange" if int(device.metadata.get("type", 0)) >= 2 else "legacy"}
                     print(f"\nTesting camera {index} ({item['platform']})", flush=True)
                     for key, function in (("live", live_check), ("recordings", recording_check)):
+                        if key == "recordings" and args.live_only:
+                            item[key] = {"status": "not_requested"}
+                            continue
                         try:
                             item[key] = await function(client, device, args, index)
                         except Exception as exc:
@@ -1863,6 +1977,7 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("--camera", type=int, help="Test this camera index only; default tests every discovered camera")
     p.add_argument("--live-seconds", type=float, default=10, help="Live sample length after the first keyframe")
+    p.add_argument("--live-only", action="store_true", help="Test live video only; do not request cloud recordings (also applies to --ha-url)")
     p.add_argument("--startup-timeout", type=float, default=60, help="Maximum cloud discovery/login/keyframe startup time")
     p.add_argument("--recordings-per-camera", type=int, default=1, help="Newest recordings sampled from the newest available day")
     p.add_argument("--segments-per-recording", type=int, default=3, help="Maximum S3 segments decoded for one recording")

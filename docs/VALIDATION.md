@@ -1,4 +1,4 @@
-# Validation status — 18 October 2026
+# Validation status — 19 October 2026
 
 Target Home Assistant release: **2026.10.2**. The official release endpoint
 reported this as the latest stable release during the final check:
@@ -14,7 +14,7 @@ python -m pytest -q tests/test_account.py tests/test_live.py tests/test_mpegts.p
   tests/test_recordings.py tests/test_proxy.py tests/test_shared.py
 ```
 
-Result: **39 tests passed, plus3 subtests**. Coverage includes:
+Result: **41 tests passed, plus 3 subtests**. Coverage includes:
 
 - Actual localhost HTTP login/device/token fixtures. Password vectors are
   independently generated with OpenSSL, including the ver2 AES device branch.
@@ -35,7 +35,7 @@ Python syntax and JSON/translation parity are checked before packaging. ZIP
 contents are checked against the source and include no APKs, native libraries,
 credentials, recordings, bytecode caches or test environments.
 
-The standalone diagnostic has a separate clean run of **9 tests passed**:
+The standalone diagnostic has a separate clean run of **12 tests passed**:
 
 ```sh
 python -m pytest -q tests/test_full_probe.py
@@ -46,6 +46,22 @@ Its self-test decodes 15 synthetic video frames and checks encryption vectors
 and the Home Assistant token-origin guard. Both checks pass from the published
 repository layout. The standalone script's embedded protocol sources also match
 the integration's corresponding modules. See [the testing guide](../V380_TESTING.md).
+
+After the 0.1.1 diagnostic changes, the six protocol/proxy groups above plus
+`tests/test_full_probe.py` complete together with **53 passed, plus 3 subtests**,
+exit status 0. This includes real localhost TCP/HTTP fixtures. The extra tests
+cover preserving a synthetic device-login rejection after trying all relays,
+distinguishing dispatcher connection failures from truncated responses, bounding
+diagnostic fields, and skipping direct/HA recording requests in live-only mode.
+An initial attempt without permission to bind localhost sockets failed during
+fixture setup; repeating with that permission completed cleanly.
+
+One user-run report now confirms cloud account login and one camera's discovery
+against the actual service. Live playback failed with a generic CloudError in
+the old tester, so it establishes no failing protocol stage. The user confirms
+live video works in V380 Pro and no saved cloud recordings are available. Tester
+1.1.0 adds safe stage/result diagnostics and `--live-only` for the next run;
+this change does not establish that the camera's live playback is fixed.
 
 ## Unresolved adapter-test failure
 
@@ -71,8 +87,9 @@ forced exit, skipped failing assertion or other bypass is used.
 
 ## Required real-account verification
 
-No V380 credentials or camera runtime were available. Neither live vendor
-playback nor a saved vendor recording was tested. Before this can be called a
+No V380 credentials or camera runtime were available to the developer. The user's
+report confirms account login/discovery, but neither live vendor playback nor a
+saved vendor recording has passed this implementation. Before this can be called a
 working integration for the user's camera, it needs:
 
 1. Successful regular account sign-in and discovery through the actual service.

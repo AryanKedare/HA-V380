@@ -86,6 +86,64 @@ class CodecTests(unittest.TestCase):
 
 
 class FakeCloudTests(unittest.IsolatedAsyncioTestCase):
+    async def test_rejected_login_preserves_stage_and_server_codes_after_all_relays(self):
+        # Real framing and correlation, with synthetic private fields. The old
+        # client discarded this result when wrapping the last relay failure.
+        client = live.CloudLiveClient({"device_id": 42}, "fixture-device-password")
+        tried = []
+
+        class Writer:
+            def __init__(self, reader): self.reader = reader
+            def write(self, data):
+                request = json.loads(data[8:])
+                response = json.dumps({"id": request["id"],
+                    "result": {"code": 1000, "errorId": -2, "message": "private-token"},
+                    "private": "https://private.example/42?token=private-token"}).encode()
+                self.reader.feed_data(struct.pack("<II", live.RPC_MAGIC, len(response)) + response)
+                self.reader.feed_eof()
+            async def drain(self): pass
+            def close(self): pass
+            async def wait_closed(self): pass
+
+        async def open_connection(host, port):
+            tried.append((host, port))
+            reader = asyncio.StreamReader()
+            return reader, Writer(reader)
+
+        async def relays(): return ["relay-one.example", "relay-two.example"]
+
+        with patch.object(client, "async_relays", side_effect=relays), \
+             patch.object(client, "_open", side_effect=open_connection):
+            with self.assertRaises(live.CloudError) as caught:
+                await anext(client.async_frames())
+        self.assertEqual(len(tried), 2)
+        self.assertEqual(caught.exception.diagnostic, {
+            "stage": "device_login_response", "detail": "login_rejected", "code": 1000, "error_id": -2})
+        self.assertEqual(caught.exception.relay_attempts, [caught.exception.diagnostic] * 2)
+        self.assertNotIn("private-token", str(caught.exception))
+        self.assertNotIn("relay-one", str(caught.exception))
+
+    async def test_dispatch_eof_is_reported_separately_from_connect_failure(self):
+        client = live.CloudLiveClient({"device_id": 42})
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"partial")
+        reader.feed_eof()
+        class Writer:
+            def write(self, data): pass
+            async def drain(self): pass
+            def close(self): pass
+            async def wait_closed(self): pass
+        with patch.object(client, "_open", return_value=(reader, Writer())):
+            with self.assertRaises(live.CloudError) as caught:
+                await client.async_relays()
+        self.assertEqual(caught.exception.diagnostic, {
+            "stage": "dispatcher_response", "detail": "incomplete_response"})
+        with patch.object(client, "_open", side_effect=live.socket.gaierror("private hostname")):
+            with self.assertRaises(live.CloudError) as caught:
+                await client.async_relays()
+        self.assertEqual(caught.exception.diagnostic, {
+            "stage": "dispatcher_connect", "detail": "dns_failed"})
+
     async def test_dispatch_login_relay_and_fragmented_video_in_memory(self):
         await self._exercise_cloud(use_tcp=False)
 

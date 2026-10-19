@@ -66,7 +66,7 @@ class CheckError(Exception):
         self.code, self.status, self.details = code, status, details
 
 
-def failure(exc):
+def _failure_category(exc):
     p = load_protocol()
     if isinstance(exc, CheckError):
         return {"status": exc.status, "reason": exc.code, **exc.details}
@@ -92,8 +92,26 @@ def failure(exc):
     return result
 
 
+def failure(exc):
+    result = _failure_category(exc)
+    current, seen = exc, set()
+    for _ in range(8):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        if isinstance(current, load_protocol().errors.CloudError) and current.diagnostic:
+            result.update(current.diagnostic)
+            if current.relay_attempts:
+                result["relay_attempts"] = current.relay_attempts[-14:]
+            break
+        current = current.__cause__
+    return result
+
+
 def log(label, result):
-    print(f"{label}: {result['status'].upper()}" + (f" ({result['reason']})" if "reason" in result else ""), flush=True)
+    details = [str(result[key]) for key in ("reason", "stage", "detail") if key in result]
+    details.extend(f"{key}={result[key]}" for key in ("code", "error_id", "protocol_version", "packet_type") if key in result)
+    print(f"{label}: {result['status'].upper()}" + (" (" + "; ".join(details) + ")" if details else ""), flush=True)
 
 
 def combine(results):
@@ -406,6 +424,10 @@ async def homeassistant_check(session, args):
                 item["live"] = failure(exc)
             result["checks"].append(item["live"])
             log(f"Home Assistant camera {index} live", item["live"])
+        if getattr(args, "live_only", False):
+            result["recording"] = {"status": "not_requested"}
+            result["status"] = combine(result["checks"])
+            return result
         try:
             identifier = "media-source://v380_cloud"
             for level in range(4):
@@ -446,14 +468,16 @@ async def homeassistant_check(session, args):
 
 async def run(args):
     p = load_protocol()
-    report = {"script_version": "1.0.0", "started_utc": datetime.now(timezone.utc).isoformat(),
+    report = {"script_version": "1.1.0", "started_utc": datetime.now(timezone.utc).isoformat(),
               "protocol_snapshot": globals().get("_PROTOCOL_SOURCE_SHA256", "source_tree"),
               "mode": "cloud_and_home_assistant" if args.ha_url and not args.ha_only else "home_assistant" if args.ha_only else "cloud",
-              "scope": {"cloud_live_sample_seconds": args.live_seconds, "recordings_per_camera": args.recordings_per_camera,
+              "scope": {"cloud_live_sample_seconds": args.live_seconds,
+                        "cloud_recordings": "not_requested" if args.live_only or args.ha_only else "requested",
+                        "recordings_per_camera": 0 if args.live_only else args.recordings_per_camera,
                         "segments_per_recording": args.segments_per_recording, "max_bytes_per_sample": args.max_bytes,
                         "browser_rendering": "not_tested", "all_historical_recordings": "not_tested", "decoder_frame_limit_per_sample": 300,
                         "home_assistant_api": "requested" if args.ha_url else "not_tested",
-                        "home_assistant_recording_scope": "representative_clip" if args.ha_url else "not_tested",
+                        "home_assistant_recording_scope": "representative_clip" if args.ha_url and not args.live_only else "not_tested",
                         "adapter_interpreter_shutdown": "not_tested"},
               "cameras": [], "checks": []}
     context = ssl.create_default_context(cafile=p.certifi.where())
@@ -477,6 +501,9 @@ async def run(args):
                             "platform": "new_key_exchange" if int(device.metadata.get("type", 0)) >= 2 else "legacy"}
                     print(f"\nTesting camera {index} ({item['platform']})", flush=True)
                     for key, function in (("live", live_check), ("recordings", recording_check)):
+                        if key == "recordings" and args.live_only:
+                            item[key] = {"status": "not_requested"}
+                            continue
                         try:
                             item[key] = await function(client, device, args, index)
                         except Exception as exc:
@@ -509,6 +536,7 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("--camera", type=int, help="Test this camera index only; default tests every discovered camera")
     p.add_argument("--live-seconds", type=float, default=10, help="Live sample length after the first keyframe")
+    p.add_argument("--live-only", action="store_true", help="Test live video only; do not request cloud recordings (also applies to --ha-url)")
     p.add_argument("--startup-timeout", type=float, default=60, help="Maximum cloud discovery/login/keyframe startup time")
     p.add_argument("--recordings-per-camera", type=int, default=1, help="Newest recordings sampled from the newest available day")
     p.add_argument("--segments-per-recording", type=int, default=3, help="Maximum S3 segments decoded for one recording")
