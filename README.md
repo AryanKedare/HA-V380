@@ -21,6 +21,27 @@ crash, described below. This is a development build for controlled testing.
 
 ## Install
 
+Download [install.sh](install.sh) and run it in your Home Assistant terminal:
+
+```sh
+sh install.sh --config-dir /config
+```
+
+The installer downloads the verified 0.1.2 commit by default. It needs `curl`
+or `wget` and `unzip`. Change `--config-dir` for a different configuration path;
+the directory must already contain `configuration.yaml`. Existing component
+files are backed up under `.v380-cloud-backups` in that config directory.
+Installation is staged before replacement, and a failed replacement restores
+the previous component. Restart Home Assistant afterward and keep the existing
+integration entry.
+
+For an offline install from an extracted repository, use
+`sh install.sh --source . --config-dir /config`. To choose another GitHub branch,
+tag or commit, use `--ref REF` instead of `--source`. The installer does not
+request credentials or change `configuration.yaml` or saved integration entries.
+
+To install manually:
+
 1. Download and extract this repository using **Code → Download ZIP**, or clone it:
 
    ```sh

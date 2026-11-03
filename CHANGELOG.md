@@ -1,5 +1,12 @@
 # Changes
 
+## Unreleased
+
+- Add `install.sh` with a verified 0.1.2 default, configurable Home Assistant
+  path/ref, offline source support, staged replacement, backups and rollback.
+- Add isolated installer tests for fresh installs, upgrades, failure recovery,
+  config preservation, download failures, and curl/wget download paths.
+
 ## 0.1.2 — 3 November 2026
 
 - Use binary device login and mode-1022 cloud forwarding for Home Assistant
