@@ -1,4 +1,30 @@
-# Validation status — 19 October 2026
+# Validation status — 3 November 2026
+
+## Current 0.1.2 results
+
+The user ran the binary-forwarding tester locally against a real account and
+one AWT3710D camera. The sanitized report records successful account login and
+discovery, protocol 31, 201 decoded H.264 frames at 640×360, and a 10.599-second
+sample. Software is `AppEV2W_VA3_V1.3.6.1_20231113`; firmware is
+`Hw_AWT3710D_XHR_V1.0_WF_20231113`. Cloud recordings were not requested and
+Home Assistant/browser playback was not tested. The developer received no
+account credentials and made no vendor requests.
+
+The same binary/1022 transport is now the Home Assistant adapter's default.
+The JSON/1002 path remains available in the standalone tester for comparison.
+Its earlier code-100/status-1/byte-13 reply is not accepted by relaxing the
+legacy check; the working forwarding path has separate reply semantics.
+
+Current offline checks complete with 21 tests passed and one loopback test
+skipped because the sandbox cannot bind sockets. Coverage includes binary
+packet offsets and credentials, fragmented 26/256/412-byte replies, real H.264
+decoding with both selective-AES modes, corrupt-media and rejection handling,
+bounded fragments, and the actual Home Assistant client's frame/session path.
+The standalone self-test decodes 15 synthetic frames successfully. No full
+pytest or Home Assistant suite was rerun because those packages are unavailable
+in this environment; the historical shutdown crash below remains unresolved.
+
+## Historical 0.1.1 validation — 19 October 2026
 
 Target Home Assistant release: **2026.10.2**. The official release endpoint
 reported this as the latest stable release during the final check:
@@ -85,18 +111,16 @@ These observations do not establish whether the issue belongs to the integration
 its fixture lifecycle, a dependency, or interpreter behavior. No GC disabling,
 forced exit, skipped failing assertion or other bypass is used.
 
-## Required real-account verification
+## Remaining real-account verification
 
-No V380 credentials or camera runtime were available to the developer. The user's
-report confirms account login/discovery, but neither live vendor playback nor a
-saved vendor recording has passed this implementation. Before this can be called a
-working integration for the user's camera, it needs:
+The user-run report now confirms account login/discovery and direct cloud live
+decoding for the camera above. Before claiming complete Home Assistant support,
+the remaining checks are:
 
-1. Successful regular account sign-in and discovery through the actual service.
-2. Supported camera-platform classification and regional cloud routing.
-3. Actual live keyframe decoding, picture timing, reconnect and source renewal.
-4. Actual UCloud MP4 or S3 TS download and browser playback/seek verification.
-5. Resolution of the adapter shutdown-test failure and repetition on the
+1. Installed Home Assistant live playback and browser rendering.
+2. Long-running picture timing, reconnect and source renewal.
+3. Actual UCloud MP4 or S3 TS download and browser playback/seek verification.
+4. Resolution of the adapter shutdown-test failure and repetition on the
    intended Home Assistant host.
 
 Newer key-exchange live video remains unimplemented; this is an explicit

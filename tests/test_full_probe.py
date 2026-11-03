@@ -236,7 +236,8 @@ def test_cloud_live_only_does_not_query_recordings_or_include_them_in_pass(tmp_p
             assert await probe.run(args)==0
             recordings.assert_not_called()
         report=json.loads(args.report.read_text())
-        assert report['script_version']=='1.1.0'
+        assert report['script_version']=='1.2.0'
+        assert report['live_transport']=='forwarded'
         assert report['scope']['cloud_recordings']=='not_requested'
         assert report['cameras'][0]['recordings']=={'status':'not_requested'}
         assert all(item['status']=='pass' for item in report['checks'])

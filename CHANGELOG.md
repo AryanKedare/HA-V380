@@ -1,5 +1,23 @@
 # Changes
 
+## 0.1.2 — 3 November 2026
+
+- Use binary device login and mode-1022 cloud forwarding for Home Assistant
+  live sessions. The previous JSON/mode-1002 session failed the user's camera.
+- Keep device-login protocol versions separate from the opaque forwarding
+  reply body; retain bounded diagnostics and close sessions on failure/unload.
+- Support bounded variable-length relay replies and both selective video-AES
+  modes. Device username/password variants are tried only for specific errors.
+- Standalone tester 1.2.0 uses forwarding by default; `--live-transport legacy`
+  retains the old path for comparison. Remove the unconfirmed code-100 bypass.
+- User-run validation on one AWT3710D camera: protocol 31, 201 decoded H.264
+  frames, 640×360, 10.599 seconds. This establishes direct-cloud sampling only.
+- Current forwarding/API/video checks: 21 passed, one loopback test skipped by
+  sandbox restrictions; standalone self-test decoded 15 synthetic frames.
+
+Home Assistant/browser playback and cloud recordings remain unverified. The
+previously documented adapter shutdown-test crash was not resolved or rerun.
+
 ## 0.1.1 — 19 October 2026
 
 - Preserve the failed live-protocol stage and bounded server result/error codes

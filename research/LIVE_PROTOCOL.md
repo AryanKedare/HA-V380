@@ -1,4 +1,34 @@
-# V380 legacy cloud live protocol
+# V380 cloud live protocols
+
+## Binary forwarding update — 3 November 2026
+
+The default live client is now `ForwardedCloudLiveClient`. It uses the same
+dispatcher but performs binary device login (1167, mode 1022) on relay port 8800,
+followed by the 301/303 stream sequence. This is a different protocol from the
+JSON/1002 path documented in the original static investigation below.
+
+Primary source: [OpenV380 V380Client.swift](https://github.com/cimplesid/v380-mac/blob/c3f5c5d17f4930fb90546be5d6c335c850975b86/Sources/V380/V380Client.swift),
+`authenticate(_: variant:)`, `encryptPassword`, and `startLive`. The 520-byte
+login contains command 1167/mode 1022, version 31 at byte 8, account mode 1 and
+device ID at offsets 9/13, domain at 17, port at 67, username at 71, and the
+random key plus encrypted password at 103. The successful 1168 reply supplies
+the communication version at 12 and ticket/session at 13/17.
+
+The 256-byte stream request uses command 301/mode 1022, domain at 8, port/device
+ID/ticket/session at 58/62/66/70, FPS 20 at 78, and selection 1 at 79. Its reply
+body is opaque: byte 12 is not used as a media-version field. A bounded reply
+is drained before 303 starts the media. This path uses the ordinary selective
+AES pattern until actual parameter packets select another supported mode; it
+does not send the legacy wrapper's fragment acknowledgements.
+
+User-run runtime evidence now confirms one AWT3710D camera with software
+`AppEV2W_VA3_V1.3.6.1_20231113` and firmware
+`Hw_AWT3710D_XHR_V1.0_WF_20231113`: device protocol 31, 201 decoded H.264 frames,
+640×360, 10.599 seconds. This is direct-cloud evidence, not Home Assistant,
+browser, recording or long-duration verification. No vendor binary or account
+was executed by the developer. See [validation](../docs/VALIDATION.md).
+
+## Original static investigation: JSON login / mode 1002
 
 This report describes static observations from the two APKs supplied by the user. No camera, Android application, vendor service, or user account was executed or contacted to establish these claims. Synthetic protocol tests establish implementation behavior against fixtures, not compatibility with a particular camera or current regional service.
 

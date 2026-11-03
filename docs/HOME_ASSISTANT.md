@@ -1,8 +1,9 @@
 # Home Assistant boundary
 
 The integration targets **Home Assistant Core 2026.10.2**. The Home Assistant
-adapter has been exercised with fixture clients; a real V380 account and camera
-have not been used to confirm end-to-end live video or recording playback.
+adapter has been exercised with fixture clients. Direct cloud decoding is now
+user-confirmed on one AWT3710D camera, while end-to-end Home Assistant/browser
+playback and recording playback remain unverified.
 
 ## Account and entities
 
@@ -41,6 +42,13 @@ explicit error, without guessed sources or local-camera fallback.
 
 ## Verification
 
+For 0.1.2, the adapter's portable API streams independently encrypted H.264
+through binary login and mode-1022 forwarding in an offline fixture, then
+releases its session. This uses the actual `V380CloudClient.async_live_frames`
+path without importing Home Assistant. The full HA suite was not rerun.
+
+Historical 0.1.1 validation:
+
 Nine proxy tests complete with exit0 using real HA authentication, signing and
 request middleware. They cover scoped playback authorization, account/camera
 isolation, vendor-token concealment, range responses and HTTP200 error bodies.
@@ -52,7 +60,8 @@ The crash reproduces on Python3.14.0,3.14.2 and3.14.8 on this macOS host; it can
 be attributed to the older runtime. The responsible interaction has not been
 isolated, and it is not represented as a clean adapter-suite pass. See
 [validation details](VALIDATION.md) for the observed boundary and remaining work.
-No real vendor account or camera was tested.
+Those fixtures make no vendor requests. Separate user-run direct-cloud evidence
+and its limits are recorded in the validation notes.
 
 ## Primary API references
 

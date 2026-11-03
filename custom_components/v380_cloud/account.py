@@ -2,7 +2,7 @@
 
 Sources: OkHttpUtil.accountLogin/updateUserDeviceList/renewUserToken,
 GlobalDefines.encrypt/md5, LoginJsonParse, UserDeivceListJsonParse.
-Only fixture-tested: no account was supplied during development.
+Development uses fixtures; separate user-run validation is in docs/VALIDATION.md.
 """
 from __future__ import annotations
 

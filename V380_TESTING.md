@@ -1,6 +1,6 @@
 # Test V380 cloud video and the installed Home Assistant integration
 
-Download **v380_full_test.py** (tester version **1.1.0**). It is a standalone script; the integration ZIP
+Download **v380_full_test.py** (tester version **1.2.0**). It is a standalone script; the integration ZIP
 is not needed on the computer running it. Use Python3.11 or newer and an
 interactive terminal. Passwords and the optional Home Assistant token are
 prompted locally, without echo or command-line arguments.
@@ -27,7 +27,7 @@ The normal run asks for your regular V380 Pro cloud account and password. It
 tests every discovered camera in sequence:
 
 1. Cloud login and device enumeration.
-2. Legacy cloud relay authentication, video decryption, and a10-second live
+2. Binary cloud-forwarding authentication, video decryption, and a10-second live
    sample. FFmpeg/PyAV must actually decode video frames for this check to pass.
 3. Cloud recording dates and files; the newest recording on the newest date.
 4. UCloud MP4 download/decode, or up to3 S3 segments downloaded and decoded.
@@ -42,7 +42,14 @@ This skips cloud-recording requests in both direct-cloud and Home Assistant
 checks. The report marks recordings `not_requested`; a live-only PASS covers
 only login, discovery and the requested live samples.
 
-When live video fails, version 1.1.0 retains a fixed protocol `stage` and
+Version 1.2.0 uses the mode-1022 forwarding path confirmed on one AWT3710D camera.
+The user-run sample decoded 201 H.264 frames at 640×360 over 10.599 seconds with
+device-login protocol 31. This does not establish Home Assistant/browser playback.
+For comparison with the previous JSON/1002 transport, add `--live-transport legacy`.
+The report records the selected transport and the actual device-login version
+when available. Forwarding reply byte 12 is not treated as a media version.
+
+When live video fails, the tester retains a fixed protocol `stage` and
 `detail`, plus bounded numeric `code`/`error_id` values when returned by the
 service. For example, `device_login_response; login_rejected; code=1000` identifies
 the device-login response rather than the account login. Dispatcher, login,
@@ -137,9 +144,15 @@ reported as unsupported, even when their saved recordings work.
 
 ## Development verification
 
-Twelve offline diagnostic tests pass, covering real video decoding, download/error
-bounds, relative and low-latency HLS objects, mocked HA REST/WebSocket workflows,
-cross-origin token protection, report privacy, preserved protocol errors,
-live-only selection and honest incomplete statuses.
-The distributable's embedded self-test also passes with exit0. No real V380
-account/camera or installed user Home Assistant was accessed during development.
+Current forwarding/API/video checks complete with 21 tests passed and one
+loopback test skipped by sandbox restrictions. They include independent binary
+packet/credential checks, variable reply lengths, both video AES modes, real
+decoding, corrupt-video rejection and Home Assistant API session cleanup. The
+distributable's embedded self-test decodes 15 synthetic frames and passes.
+
+The existing pytest diagnostic and full Home Assistant suites were not rerun
+because pytest/Home Assistant are unavailable in this environment. Historical
+results and the unresolved adapter shutdown crash are recorded in
+[validation notes](docs/VALIDATION.md). Development fixtures make no vendor
+requests. Real-camera decoding was confirmed by the user's separate local run;
+the developer did not receive account credentials or access their Home Assistant.

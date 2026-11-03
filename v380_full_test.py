@@ -5,7 +5,7 @@
 # Also check installed HA: python3 v380_full_test.py --ha-url http://homeassistant.local:8123
 # The audited protocol modules below are embedded as readable source literals.
 # They are loaded from this file only; no remote code is downloaded or executed.
-# Source is the experimental integration created from the supplied V380 Pro APK.
+# Source: V380 Cloud 0.1.2; protocol references are embedded below.
 """Test V380 cloud login, live video decoding and recordings; optionally check Home Assistant.
 Credentials are prompted locally. The report excludes account/camera IDs, secrets and URLs.
 Requires Python3.11+ and aiohttp, cryptography, av, certifi.
@@ -36,7 +36,8 @@ _EMBEDDED_PROTOCOL = {
         '    def __init__(self, message: str = "Cloud service request failed", *, stage: str | None = None,\n'
         '                 reason: str | None = None, code: int | None = None,\n'
         '                 error_id: int | None = None, protocol_version: int | None = None,\n'
-        '                 packet_type: int | None = None) -> None:\n'
+        '                 packet_type: int | None = None, relay_command: int | None = None,\n'
+        '                 relay_status: int | None = None) -> None:\n'
         '        super().__init__(message)\n'
         '        # Only fixed enums and bounded protocol numbers may enter a report.\n'
         '        # Messages, endpoints, handles, sessions and device IDs never do.\n'
@@ -51,6 +52,8 @@ _EMBEDDED_PROTOCOL = {
         '            ("error_id", error_id, -65535, 65535),\n'
         '            ("protocol_version", protocol_version, 0, 255),\n'
         '            ("packet_type", packet_type, 0, 255),\n'
+        '            ("relay_command", relay_command, 0, 65535),\n'
+        '            ("relay_status", relay_status, -65535, 65535),\n'
         '        ):\n'
         '            if type(value) is int and low <= value <= high:\n'
         '                self.diagnostic[name] = value\n'
@@ -137,7 +140,7 @@ _EMBEDDED_PROTOCOL = {
         '\n'
         'Sources: OkHttpUtil.accountLogin/updateUserDeviceList/renewUserToken,\n'
         'GlobalDefines.encrypt/md5, LoginJsonParse, UserDeivceListJsonParse.\n'
-        'Only fixture-tested: no account was supplied during development.\n'
+        'Development uses fixtures; separate user-run validation is in docs/VALIDATION.md.\n'
         '"""\n'
         'from __future__ import annotations\n'
         '\n'
@@ -400,12 +403,14 @@ _EMBEDDED_PROTOCOL = {
         '        self._password = ""\n'
     ),
     'live': (
-        '"""Portable legacy V380 cloud relay transport, recovered from the supplied APK.\n'
+        '"""Portable V380 legacy cloud transports.\n'
         '\n'
         'Static sources: classes9.dex DispatchServerGetter / LoginHelper / Functions;\n'
         'libhsMediaLibrary.so HSLiveDataV2Transmitter and libaes.so media_data_decrypt.\n'
+        'The binary 1022 forwarding path follows the source reference below and was\n'
+        "validated by a user-run AWT3710D live decode; it is the HA adapter's default.\n"
         'The newer MQTT/key-exchange platform is deliberately reported unsupported.\n'
-        'No camera, LAN discovery or Android native library is required.\n'
+        'No LAN discovery or Android native library is required.\n'
         '"""\n'
         'from __future__ import annotations\n'
         '\n'
@@ -512,6 +517,28 @@ _EMBEDDED_PROTOCOL = {
         '    return bytes(packet)\n'
         '\n'
         '\n'
+        'def parse_relay_response(response: bytes) -> int:\n'
+        '    """Validate the legacy 1002 reply without applying forwarding semantics."""\n'
+        '    if len(response) != 32:\n'
+        '        raise CloudError("Invalid cloud relay response framing",\n'
+        '                         stage="relay_handshake", reason="invalid_framing")\n'
+        '    command, result, status = struct.unpack_from("<Iii", response)\n'
+        '    media_version = response[12]\n'
+        '    diagnostic = dict(stage="relay_handshake", code=result,\n'
+        '                      relay_command=command, relay_status=status,\n'
+        '                      protocol_version=media_version)\n'
+        '    if command != 401:\n'
+        '        raise CloudError("Invalid cloud relay response command",\n'
+        '                         reason="invalid_framing", **diagnostic)\n'
+        '    if result != 1001:\n'
+        '        raise CloudError("The cloud relay did not accept the video session",\n'
+        '                         reason="relay_rejected", **diagnostic)\n'
+        '    if media_version < 21:\n'
+        '        raise UnsupportedError("This camera\'s old media framing is not supported",\n'
+        '                               reason="media_version_unsupported", **diagnostic)\n'
+        '    return media_version\n'
+        '\n'
+        '\n'
         '@dataclass(frozen=True, slots=True)\n'
         'class Frame:\n'
         '    payload: bytes\n'
@@ -524,10 +551,12 @@ _EMBEDDED_PROTOCOL = {
         'class FrameDecoder:\n'
         '    """Reassemble bounded packet fragments, then decrypt the complete frame."""\n'
         '\n'
-        '    def __init__(self, handle: int, communication_version: int, media_version: int) -> None:\n'
+        '    def __init__(self, handle: int, communication_version: int, media_version: int,\n'
+        '                 *, fragment_limit: int = 8000) -> None:\n'
         '        self.key = media_key(handle)\n'
         '        self.communication_version = communication_version\n'
         '        self.media_version = media_version\n'
+        '        self.fragment_limit = fragment_limit\n'
         '        self._parts: list[bytes] = []\n'
         '        self._total = 0\n'
         '        self._next = 0\n'
@@ -537,7 +566,7 @@ _EMBEDDED_PROTOCOL = {
         '        if len(header) != 12 or header[0] != 0x7F:\n'
         '            raise CloudError("Invalid cloud media packet")\n'
         '        total, current, length = struct.unpack_from("<HHH", header, 3)\n'
-        '        if not total or current >= total or length != len(payload) or length > 8000:\n'
+        '        if not total or current >= total or length != len(payload) or length > self.fragment_limit:\n'
         '            raise CloudError("Invalid cloud media fragment bounds")\n'
         '        if current == 0:\n'
         '            self._parts = []\n'
@@ -576,6 +605,9 @@ _EMBEDDED_PROTOCOL = {
         'class CloudLiveClient:\n'
         '    """A one-viewer cloud session; the caller consumes and closes async_frames."""\n'
         '\n'
+        '    fragment_limit = 8000\n'
+        '    acknowledge_fragments = True\n'
+        '\n'
         '    def __init__(\n'
         '        self,\n'
         '        metadata: Mapping[str, Any],\n'
@@ -607,6 +639,7 @@ _EMBEDDED_PROTOCOL = {
         '        self.relay_port = relay_port\n'
         '        self.timeout = timeout\n'
         '        self.audio = audio\n'
+        '        self.login_protocol_version: int | None = None\n'
         '        self._writer: asyncio.StreamWriter | None = None\n'
         '\n'
         '    async def _open(self, host: str, port: int) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:\n'
@@ -724,6 +757,25 @@ _EMBEDDED_PROTOCOL = {
         '            if writer is not None:\n'
         '                await self._close(writer)\n'
         '\n'
+        '    async def _start_relay(self, host: str, login: Mapping[str, Any]) -> tuple[asyncio.StreamReader, int]:\n'
+        '        stage = "relay_connect"\n'
+        '        try:\n'
+        '            reader, writer = await self._open(host, self.relay_port)\n'
+        '            self._writer = writer\n'
+        '            stage = "relay_handshake"\n'
+        '            handle, session = int(login["handle"]), int(login["session"])\n'
+        '            writer.write(relay_request(self.device_id, self.domain, self.camera_port, handle, session, audio=self.audio))\n'
+        '            await writer.drain()\n'
+        '            response = await self._read(reader, 32)\n'
+        '            media_version = parse_relay_response(response)\n'
+        '            # SDK V2 expects 256 bytes of login response for v21+ devices.\n'
+        '            await self._read(reader, 224)\n'
+        '            writer.write(struct.pack("<II", 303, 0x3001).ljust(256, b"\\x00"))\n'
+        '            await writer.drain()\n'
+        '            return reader, media_version\n'
+        '        except (OSError, TimeoutError, asyncio.IncompleteReadError) as err:\n'
+        '            raise self._transport_error(err, stage) from err\n'
+        '\n'
         '    async def async_frames(self) -> AsyncIterator[Frame]:\n'
         '        """Yield decrypted compressed frames over a source-backed cloud relay."""\n'
         '        relays = await self.async_relays()\n'
@@ -731,31 +783,20 @@ _EMBEDDED_PROTOCOL = {
         '        attempts: list[dict[str, Any]] = []\n'
         '        for host in relays:\n'
         '            emitted = False\n'
+        '            self.login_protocol_version = None\n'
         '            stage = "device_login_connect"\n'
         '            try:\n'
         '                login = await self._login(host)\n'
+        '                login_version = int(login.get("version", 0))\n'
+        '                if 0 <= login_version <= 255:\n'
+        '                    self.login_protocol_version = login_version\n'
         '                stage = "relay_connect"\n'
-        '                reader, writer = await self._open(host, self.relay_port)\n'
-        '                self._writer = writer\n'
-        '                stage = "relay_handshake"\n'
+        '                reader, media_version = await self._start_relay(host, login)\n'
+        '                writer = self._writer\n'
+        '                assert writer is not None\n'
         '                handle, session = int(login["handle"]), int(login["session"])\n'
-        '                writer.write(relay_request(self.device_id, self.domain, self.camera_port, handle, session, audio=self.audio))\n'
-        '                await writer.drain()\n'
-        '                response = await self._read(reader, 32)\n'
-        '                command, result, _status = struct.unpack_from("<III", response)\n'
-        '                media_version = response[12]\n'
-        '                if command != 401 or result != 1001:\n'
-        '                    raise CloudError("The cloud relay rejected the video session", stage=stage,\n'
-        '                                     reason="relay_rejected", code=result)\n'
-        '                if media_version < 21:\n'
-        '                    raise UnsupportedError("This camera\'s old media framing is not supported", stage=stage,\n'
-        '                                           reason="media_version_unsupported", protocol_version=media_version)\n'
-        '                # SDK V2 expects 256 bytes of login response for v21+ devices.\n'
-        '                await self._read(reader, 224)\n'
-        '                start = struct.pack("<II", 303, 0x3001).ljust(256, b"\\x00")\n'
-        '                writer.write(start)\n'
-        '                await writer.drain()\n'
-        '                decoder = FrameDecoder(handle, int(login.get("version", 31)), media_version)\n'
+        '                decoder = FrameDecoder(handle, int(login.get("version", 31)), media_version,\n'
+        '                                       fragment_limit=self.fragment_limit)\n'
         '                stage = "media_stream"\n'
         '                received_fragments = 0\n'
         '                last_ack = asyncio.get_running_loop().time()\n'
@@ -764,12 +805,12 @@ _EMBEDDED_PROTOCOL = {
         '                    marker = header[0]\n'
         '                    if marker == 0x7F:\n'
         '                        length = struct.unpack_from("<H", header, 7)[0]\n'
-        '                        if length > 8000:\n'
+        '                        if length > self.fragment_limit:\n'
         '                            raise CloudError("The cloud relay sent an oversized fragment")\n'
         '                        frame = decoder.feed(header, await self._read(reader, length))\n'
         '                        received_fragments += 1\n'
         '                        # Native V2 acknowledges each 30 fragments, command5005.\n'
-        '                        if received_fragments % 30 == 0:\n'
+        '                        if self.acknowledge_fragments and received_fragments % 30 == 0:\n'
         '                            now = asyncio.get_running_loop().time()\n'
         '                            elapsed = int((now - last_ack) * 1000) & 0xFFFF\n'
         '                            writer.write(struct.pack("<IHH", 5005, received_fragments & 0xFFFF, elapsed).ljust(16, b"\\x00"))\n'
@@ -799,6 +840,8 @@ _EMBEDDED_PROTOCOL = {
         '                raise\n'
         '            except (CloudError, OSError, TimeoutError, asyncio.IncompleteReadError, ValueError, TypeError) as err:\n'
         '                detail = self._transport_error(err, stage)\n'
+        '                if self.login_protocol_version is not None:\n'
+        '                    detail.diagnostic["login_protocol_version"] = self.login_protocol_version\n'
         '                attempts.append(dict(detail.diagnostic))\n'
         '                detail.relay_attempts = attempts[-14:]\n'
         '                if emitted:\n'
@@ -818,6 +861,155 @@ _EMBEDDED_PROTOCOL = {
         '        if self._writer is not None:\n'
         '            await self._close(self._writer)\n'
         '            self._writer = None\n'
+        '\n'
+        '\n'
+        'def forwarded_login_request(device_id: int, domain: str, port: int, username: str,\n'
+        '                            password: str, random_key: bytes, *, padded: bool = False) -> bytes:\n'
+        '    """Binary cloud login (1167/1022), independently described by OpenV380.\n'
+        '\n'
+        '    Reference: cimplesid/v380-mac, commit c3f5c5d17f4930fb90546be5d6c335c850975b86,\n'
+        '    Sources/V380/V380Client.swift authenticate(_:), encryptPassword(_:encoding:).\n'
+        '    This is a separate forwarding protocol, not a relaxed 1002 reply check.\n'
+        '    """\n'
+        '    domain_bytes, username_bytes = domain.encode("ascii"), username.encode("utf-8")\n'
+        '    password_bytes = password.encode("utf-8")\n'
+        '    if len(domain_bytes) > 49 or len(username_bytes) > 32 or len(random_key) != 16:\n'
+        '        raise CloudError("Invalid binary cloud login metadata",\n'
+        '                         stage="device_credentials", reason="invalid_metadata")\n'
+        '    if padded:\n'
+        '        encrypted = random_key + double_encrypt(password_bytes, random_key)[:64]\n'
+        '    else:\n'
+        '        if len(password_bytes) > 48:\n'
+        '            raise CloudError("The binary password requires padded encoding",\n'
+        '                             stage="device_credentials", reason="invalid_metadata")\n'
+        '        encrypted = random_key + _aes_ecb(_aes_ecb(password_bytes.ljust(48, b"\\x00"), STATIC_KEY), random_key)\n'
+        '    packet = bytearray(520)\n'
+        '    struct.pack_into("<II", packet, 0, 1167, 1022)\n'
+        '    packet[8] = 31\n'
+        '    struct.pack_into("<II", packet, 9, 1, device_id)\n'
+        '    packet[17:17 + len(domain_bytes)] = domain_bytes\n'
+        '    struct.pack_into("<I", packet, 67, port)\n'
+        '    packet[71:71 + len(username_bytes)] = username_bytes\n'
+        '    packet[103:103 + len(encrypted)] = encrypted\n'
+        '    return bytes(packet)\n'
+        '\n'
+        '\n'
+        'class ForwardedCloudLiveClient(CloudLiveClient):\n'
+        '    """Binary 1022 cloud path; uses only dispatcher-provided relays.\n'
+        '\n'
+        '    Account discovery and media cryptography are shared with the legacy client.\n'
+        '    The 401 reply body is opaque here: byte 12 is not a media-version field in\n'
+        '    this protocol. Media parameters, when supplied, select the decryption mode.\n'
+        '    """\n'
+        '\n'
+        '    fragment_limit = 20000\n'
+        '    acknowledge_fragments = False\n'
+        '    reply_idle_timeout = 0.5\n'
+        '\n'
+        '    async def _binary_login(self, host: str, username: str, *, padded: bool) -> dict[str, Any]:\n'
+        '        writer = None\n'
+        '        stage = "device_login_connect"\n'
+        '        try:\n'
+        '            reader, writer = await self._open(host, self.relay_port)\n'
+        '            stage = "device_login_response"\n'
+        '            writer.write(forwarded_login_request(self.device_id, self.domain, self.camera_port,\n'
+        '                username, self._password, self._random_key(), padded=padded))\n'
+        '            await writer.drain()\n'
+        '            command, result = struct.unpack("<ii", await self._read(reader, 8))\n'
+        '            if command != 1168:\n'
+        '                raise CloudError("The binary cloud login command is unsupported", stage=stage,\n'
+        '                                 reason="invalid_framing", code=command)\n'
+        '            if result != 1001:\n'
+        '                kind = AuthError if result in (1011, 1012, 1018) else CloudError\n'
+        '                raise kind("The cloud camera did not accept binary login", stage=stage,\n'
+        '                           reason="login_rejected", code=result)\n'
+        '            body = await self._read(reader, 15)  # Through deviceType/camType, offsets 21/22.\n'
+        '            response = bytes(8) + body\n'
+        '            version = response[12]\n'
+        '            if version < 21:\n'
+        '                raise UnsupportedError("This camera\'s old frame metadata is unsupported", stage=stage,\n'
+        '                                       reason="media_version_unsupported", protocol_version=version)\n'
+        '            handle, session = struct.unpack_from("<II", response, 13)\n'
+        '            return {"handle": handle, "session": session, "version": version}\n'
+        '        except (OSError, TimeoutError, asyncio.IncompleteReadError) as err:\n'
+        '            raise self._transport_error(err, stage) from err\n'
+        '        finally:\n'
+        '            if writer is not None:\n'
+        '                await self._close(writer)\n'
+        '\n'
+        '    async def _login(self, host: str) -> dict[str, Any]:\n'
+        '        # Vary only fields identified by explicit device credential errors.\n'
+        '        usernames = list(dict.fromkeys((self.username, str(self.device_id))))\n'
+        '        for username in usernames:\n'
+        '            encodings = (False, True) if len(self._password.encode("utf-8")) <= 48 else (True,)\n'
+        '            for padded in encodings:\n'
+        '                try:\n'
+        '                    return await self._binary_login(host, username, padded=padded)\n'
+        '                except AuthError as err:\n'
+        '                    code = err.diagnostic.get("code")\n'
+        '                    if code == 1011:\n'
+        '                        break\n'
+        '                    if code == 1012 and not padded:\n'
+        '                        continue\n'
+        '                    raise\n'
+        '            else:\n'
+        '                continue\n'
+        '            if username == usernames[-1]:\n'
+        '                raise AuthError("The cloud camera rejected its device username",\n'
+        '                                stage="device_login_response", reason="login_rejected", code=1011)\n'
+        '        raise CloudError("The cloud camera could not complete binary login",\n'
+        '                         stage="device_login_response", reason="login_rejected")\n'
+        '\n'
+        '    async def _start_relay(self, host: str, login: Mapping[str, Any]) -> tuple[asyncio.StreamReader, int]:\n'
+        '        stage = "relay_connect"\n'
+        '        try:\n'
+        '            reader, writer = await self._open(host, self.relay_port)\n'
+        '            self._writer = writer\n'
+        '            stage = "relay_handshake"\n'
+        "            # Forwarding mode 1022 routes the camera's native stream protocol.\n"
+        '            packet = bytearray(256)\n'
+        '            struct.pack_into("<II", packet, 0, 301, 1022)\n'
+        '            domain = self.domain.encode("ascii")\n'
+        '            packet[8:8 + len(domain)] = domain\n'
+        '            struct.pack_into("<IIII", packet, 58, self.camera_port, self.device_id,\n'
+        '                             int(login["handle"]) & 0xFFFFFFFF, int(login["session"]) & 0xFFFFFFFF)\n'
+        '            packet[78] = 20\n'
+        '            struct.pack_into("<I", packet, 79, 1)\n'
+        '            writer.write(packet)\n'
+        '            await writer.drain()\n'
+        '            command, result = struct.unpack("<Ii", await self._read(reader, 8))\n'
+        '            if command != 401:\n'
+        '                raise CloudError("Invalid forwarded stream reply", stage=stage, reason="invalid_framing",\n'
+        '                                 relay_command=command, code=result)\n'
+        '            # Stream login has different result semantics from device login.\n'
+        '            # Actual media validation still follows the positive reply.\n'
+        '            if result not in (100, 402, 1001):\n'
+        '                raise CloudError("The forwarded stream session was rejected", stage=stage,\n'
+        '                                 reason="relay_rejected", relay_command=command, code=result)\n'
+        '            await self._read(reader, 18)  # Common minimum 401 header is 26 bytes.\n'
+        '            # Forwarded reply lengths vary (26/256/412). No media is requested\n'
+        '            # yet. Drain a bounded reply until quiet rather than imposing the\n'
+        '            # unrelated 1002 fixed 256-byte layout on this path.\n'
+        '            received = 26\n'
+        '            while True:\n'
+        '                try:\n'
+        '                    extra = await asyncio.wait_for(reader.read(1025 - received),\n'
+        '                                                   min(self.reply_idle_timeout, self.timeout))\n'
+        '                except TimeoutError:\n'
+        '                    break\n'
+        '                if not extra:\n'
+        '                    raise asyncio.IncompleteReadError(b"", 1)\n'
+        '                received += len(extra)\n'
+        '                if received > 1024:\n'
+        '                    raise CloudError("The forwarded stream reply exceeds its size limit",\n'
+        '                                     stage=stage, reason="invalid_framing")\n'
+        '            writer.write(struct.pack("<II", 303, 0x3001).ljust(256, b"\\x00"))\n'
+        '            await writer.drain()\n'
+        '            # No relay media version was negotiated. The common selective-AES\n'
+        '            # mode applies until a real parameter packet selects version 21.\n'
+        '            return reader, 0\n'
+        '        except (OSError, TimeoutError, asyncio.IncompleteReadError) as err:\n'
+        '            raise self._transport_error(err, stage) from err\n'
     ),
     'mpegts': (
         '"""Minimal Annex-B H.264/H.265 to MPEG-TS packetizer (video only).\n'
@@ -1436,9 +1628,9 @@ _EMBEDDED_PROTOCOL = {
     ),
 }
 
-_PROTOCOL_SOURCE_SHA256 = {'errors': '497588dd0fcc37c737fd8a66ebf81277140931658f5c2ada2ed72cea9878181c', 'shared': '23eeebbb8422839d0fb26328a302d48a90aa34e4dffe0b4153db26989e74794e', 'account': '9af7c667a6b5d31b664c0ed25353b9d7e5a416a827b8041104d3851caa28a14f', 'live': '184438ff4f1ae074e1ce59417bd4cc79f826869eebf669803801b32555f88546', 'mpegts': '5df2b4b70759cf278991d20c8ba3082b71eb3ac18d218350402dba4c81bfb59d', 'recordings': '3b30647f57ec2a1ff5756ee14d7a3f7ef1925c0b9a79d04882162e854daaa04f'}
 _SELF_TEST_TS_B64 = 'R0AAMKYA////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////AACwDQABwQAAAAHwACqxBLJHUAAwoQD/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////AAKwEgABwQAA4QDwABvhAPAAFb1NVkdBADAHEAAAAAB+AAAAAeAAAICABSEAAQABAAAAAWdCwAraEJoQAAADABAAAAMDKPEiagAAAAFozg/IAAABBgX//0LcRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY1IC0gSC4yNjQvTVBFRy00IEFWQyBjb2RlYyAtIENvcHlsZWZ0IDIwMDMtMjAyNSAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQuaHRtbCAtIG9wdGlvRwEAEW5zOiBjYWJhYz0wIHJlZj0xIGRlYmxvY2s9MDowOjAgYW5hbHlzZT0wOjAgbWU9ZGlhIHN1Ym1lPTAgcHN5PTEgcHN5X3JkPTEuMDA6MC4wMCBtaXhlZF9yZWY9MCBtZV9yYW5nZT0xNiBjaHJvbWFfbWU9MSB0cmVsbGlzPTAgOHg4ZGN0PTAgY3FtPTAgZGVhZHpvbmU9MjEsMTEgZmFzdF9wc2tpcD0xIGNocm9tYV9xcF9vZmZHAQASc2V0PTAgdGhyZWFkcz0xIGxvb2thaGVhZF90aHJlYWRzPTEgc2xpY2VkX3RocmVhZHM9MCBucj0wIGRlY2ltYXRlPTEgaW50ZXJsYWNlZD0wIGJsdXJheV9jb21wYXQ9MCBjb25zdHJhaW5lZF9pbnRyYT0wIGJmcmFtZXM9MCB3ZWlnaHRwPTAga2V5aW50PTI1MCBrZXlpbnRfbWluPTI1IHNjZW5lY3V0PTAgaW50cmFfcmVmckcBADM9AP///////////////////////////////////////////////////////////////////////////////2VzaD0wIHJjPWNyZiBtYnRyZWU9MCBjcmY9MjMuMCBxY29tcD0wLjYwIHFwbWluPTAgcXBtYXg9NjkgcXBzdGVwPTQgaXBfcmF0aW89MS40MCBhcT0wAIAAAAFliIQ6EYoAAkqxwABEZjgACIzJycnXXXXXXXXXXXXgR0EAND4QAAAHCH4A/////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAARwhAAAAAUGaIDK8KRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUcAAQIo4AAgRYnxPifP5/P5/P5/P5/P5/P5/BHQQA1PhAAAA4QfgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQABOEEAAAABQZpAMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8EdBADY+EAAAFRh+AP////////////////////////////////////////////////////////////////////////8AAAHgAACAgAUhAAFUYQAAAAFBmmAyvCkUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFHAAECKOAAIEWJ8T4nz+fz+fz+fz+fz+fz+fwR0EANz4QAAAcIH4A/////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAAXCBAAAAAUGagDK8KRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUcAAQIo4AAgRYnxPifP5/P5/P5/P5/P5/P5/BHQQA4PhAAACMofgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQABjKEAAAABQZqgMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8EdBADk+EAAAKjB+AP////////////////////////////////////////////////////////////////////////8AAAHgAACAgAUhAAGowQAAAAFBmsAyvCkUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFHAAECKOAAIEWJ8T4nz+fz+fz+fz+fz+fz+fwR0EAOj4QAAAxOH4A/////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAAcThAAAAAUGa4DK8KRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUcAAQIo4AAgRYnxPifP5/P5/P5/P5/P5/P5/BHQQA7PhAAADhAfgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQAB4QEAAAABQZsAMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8EdBADw+EAAAP0h+AP////////////////////////////////////////////////////////////////////////8AAAHgAACAgAUhAAH9IQAAAAFBmyAyvCkUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFHAAECKOAAIEWJ8T4nz+fz+fz+fz+fz+fz+fwR0EAPT4QAABGUH4A/////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAAxlBAAAAAUGbQDK8KRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUcAAQIo4AAgRYnxPifP5/P5/P5/P5/P5/P5/BHQQA+PhAAAE1YfgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQADNWEAAAABQZtgMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8EdBAD+AEAAAVGB+AP////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////8AAAHgAACAgAUhAANRgQAAAAFBm4Ayo3FAAEFGOAAICscAAQFcT4nxPn8/n8/n8/n8/n8/n8/gR0EAMIYQAABbaH4A/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAA22hAAAAAUGboDKjcUAA1HAMcA4nxPifP5/P5/P5/P5/P5/P5/BHQQAxPhAAAGJwfgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQADicEAAAABQZvAMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8A=='
 _SELF_TEST_EXPECTED_FRAMES = 15
+_PROTOCOL_SOURCE_SHA256 = {'errors': 'db72d1974815a92688295b798fd7f884eeb05476c51fa49489a1e92f3297c916', 'shared': '23eeebbb8422839d0fb26328a302d48a90aa34e4dffe0b4153db26989e74794e', 'account': '25ca5c778aaa7f016e29f2e194a4446fb26d0d12b735ba932b00b2d686960781', 'live': '1bcd0f530250ea6c2e8c276aca876778b9505e8257d5cef6985455a999136196', 'mpegts': '5df2b4b70759cf278991d20c8ba3082b71eb3ac18d218350402dba4c81bfb59d', 'recordings': '3b30647f57ec2a1ff5756ee14d7a3f7ef1925c0b9a79d04882162e854daaa04f'}
 
 #!/usr/bin/env python3
 """V380 cloud and optional Home Assistant diagnostic (Python 3.11+).
@@ -1464,6 +1656,7 @@ import types
 from urllib.parse import quote, urljoin, urlsplit
 
 DEPENDENCIES = "aiohttp cryptography av certifi"
+VERSION = "1.2.0"
 _MODULES = ("errors", "shared", "account", "live", "mpegts", "recordings")
 _PROTOCOL = None
 
@@ -1551,7 +1744,7 @@ def failure(exc):
 
 def log(label, result):
     details = [str(result[key]) for key in ("reason", "stage", "detail") if key in result]
-    details.extend(f"{key}={result[key]}" for key in ("code", "error_id", "protocol_version", "packet_type") if key in result)
+    details.extend(f"{key}={result[key]}" for key in ("code", "error_id", "protocol_version", "packet_type", "relay_command", "relay_status", "login_protocol_version") if key in result)
     print(f"{label}: {result['status'].upper()}" + (" (" + "; ".join(details) + ")" if details else ""), flush=True)
 
 
@@ -1642,7 +1835,9 @@ async def live_check(client, device, args, index):
     try:
         if int(device.metadata.get("type", 0)) >= 2:
             raise CheckError("new_key_exchange_live_protocol", "unsupported")
-        transport = p.live.CloudLiveClient(device.metadata, p.account.device_password(device.metadata), audio=False)
+        selected_transport = getattr(args, "live_transport", "forwarded")
+        client_type = p.live.ForwardedCloudLiveClient if selected_transport == "forwarded" else p.live.CloudLiveClient
+        transport = client_type(device.metadata, p.account.device_password(device.metadata), audio=False)
         frames = transport.async_frames()
         mux = None
         data = bytearray()
@@ -1672,7 +1867,9 @@ async def live_check(client, device, args, index):
             raise CheckError("live_session_ended_before_sample_completed")
         result = await asyncio.to_thread(decode_video, bytes(data), format="mpegts")
         result["received_access_units"] = received
-        result["transport"] = "remote_cloud_relay"
+        result["transport"] = "remote_cloud_relay_forwarded" if selected_transport == "forwarded" else "remote_cloud_relay"
+        if transport.login_protocol_version is not None:
+            result["login_protocol_version"] = transport.login_protocol_version
         save_sample(args, f"camera-{index:03d}-live.ts", data)
         return result
     finally:
@@ -1909,7 +2106,8 @@ async def homeassistant_check(session, args):
 
 async def run(args):
     p = load_protocol()
-    report = {"script_version": "1.1.0", "started_utc": datetime.now(timezone.utc).isoformat(),
+    report = {"script_version": VERSION, "started_utc": datetime.now(timezone.utc).isoformat(),
+              "live_transport": "not_requested" if args.ha_only else getattr(args, "live_transport", "forwarded"),
               "protocol_snapshot": globals().get("_PROTOCOL_SOURCE_SHA256", "source_tree"),
               "mode": "cloud_and_home_assistant" if args.ha_url and not args.ha_only else "home_assistant" if args.ha_only else "cloud",
               "scope": {"cloud_live_sample_seconds": args.live_seconds,
@@ -1975,9 +2173,12 @@ async def run(args):
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    p.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
     p.add_argument("--camera", type=int, help="Test this camera index only; default tests every discovered camera")
     p.add_argument("--live-seconds", type=float, default=10, help="Live sample length after the first keyframe")
     p.add_argument("--live-only", action="store_true", help="Test live video only; do not request cloud recordings (also applies to --ha-url)")
+    p.add_argument("--live-transport", choices=("forwarded", "legacy"), default="forwarded",
+                   help="Direct-cloud transport: binary/1022 forwarding, or legacy JSON/1002 for comparison")
     p.add_argument("--startup-timeout", type=float, default=60, help="Maximum cloud discovery/login/keyframe startup time")
     p.add_argument("--recordings-per-camera", type=int, default=1, help="Newest recordings sampled from the newest available day")
     p.add_argument("--segments-per-recording", type=int, default=3, help="Maximum S3 segments decoded for one recording")

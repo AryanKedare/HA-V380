@@ -20,7 +20,8 @@ class CloudError(Exception):
     def __init__(self, message: str = "Cloud service request failed", *, stage: str | None = None,
                  reason: str | None = None, code: int | None = None,
                  error_id: int | None = None, protocol_version: int | None = None,
-                 packet_type: int | None = None) -> None:
+                 packet_type: int | None = None, relay_command: int | None = None,
+                 relay_status: int | None = None) -> None:
         super().__init__(message)
         # Only fixed enums and bounded protocol numbers may enter a report.
         # Messages, endpoints, handles, sessions and device IDs never do.
@@ -35,6 +36,8 @@ class CloudError(Exception):
             ("error_id", error_id, -65535, 65535),
             ("protocol_version", protocol_version, 0, 255),
             ("packet_type", packet_type, 0, 255),
+            ("relay_command", relay_command, 0, 65535),
+            ("relay_status", relay_status, -65535, 65535),
         ):
             if type(value) is int and low <= value <= high:
                 self.diagnostic[name] = value

@@ -23,6 +23,7 @@ import types
 from urllib.parse import quote, urljoin, urlsplit
 
 DEPENDENCIES = "aiohttp cryptography av certifi"
+VERSION = "1.2.0"
 _MODULES = ("errors", "shared", "account", "live", "mpegts", "recordings")
 _PROTOCOL = None
 
@@ -110,7 +111,7 @@ def failure(exc):
 
 def log(label, result):
     details = [str(result[key]) for key in ("reason", "stage", "detail") if key in result]
-    details.extend(f"{key}={result[key]}" for key in ("code", "error_id", "protocol_version", "packet_type") if key in result)
+    details.extend(f"{key}={result[key]}" for key in ("code", "error_id", "protocol_version", "packet_type", "relay_command", "relay_status", "login_protocol_version") if key in result)
     print(f"{label}: {result['status'].upper()}" + (" (" + "; ".join(details) + ")" if details else ""), flush=True)
 
 
@@ -201,7 +202,9 @@ async def live_check(client, device, args, index):
     try:
         if int(device.metadata.get("type", 0)) >= 2:
             raise CheckError("new_key_exchange_live_protocol", "unsupported")
-        transport = p.live.CloudLiveClient(device.metadata, p.account.device_password(device.metadata), audio=False)
+        selected_transport = getattr(args, "live_transport", "forwarded")
+        client_type = p.live.ForwardedCloudLiveClient if selected_transport == "forwarded" else p.live.CloudLiveClient
+        transport = client_type(device.metadata, p.account.device_password(device.metadata), audio=False)
         frames = transport.async_frames()
         mux = None
         data = bytearray()
@@ -231,7 +234,9 @@ async def live_check(client, device, args, index):
             raise CheckError("live_session_ended_before_sample_completed")
         result = await asyncio.to_thread(decode_video, bytes(data), format="mpegts")
         result["received_access_units"] = received
-        result["transport"] = "remote_cloud_relay"
+        result["transport"] = "remote_cloud_relay_forwarded" if selected_transport == "forwarded" else "remote_cloud_relay"
+        if transport.login_protocol_version is not None:
+            result["login_protocol_version"] = transport.login_protocol_version
         save_sample(args, f"camera-{index:03d}-live.ts", data)
         return result
     finally:
@@ -468,7 +473,8 @@ async def homeassistant_check(session, args):
 
 async def run(args):
     p = load_protocol()
-    report = {"script_version": "1.1.0", "started_utc": datetime.now(timezone.utc).isoformat(),
+    report = {"script_version": VERSION, "started_utc": datetime.now(timezone.utc).isoformat(),
+              "live_transport": "not_requested" if args.ha_only else getattr(args, "live_transport", "forwarded"),
               "protocol_snapshot": globals().get("_PROTOCOL_SOURCE_SHA256", "source_tree"),
               "mode": "cloud_and_home_assistant" if args.ha_url and not args.ha_only else "home_assistant" if args.ha_only else "cloud",
               "scope": {"cloud_live_sample_seconds": args.live_seconds,
@@ -534,9 +540,12 @@ async def run(args):
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    p.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
     p.add_argument("--camera", type=int, help="Test this camera index only; default tests every discovered camera")
     p.add_argument("--live-seconds", type=float, default=10, help="Live sample length after the first keyframe")
     p.add_argument("--live-only", action="store_true", help="Test live video only; do not request cloud recordings (also applies to --ha-url)")
+    p.add_argument("--live-transport", choices=("forwarded", "legacy"), default="forwarded",
+                   help="Direct-cloud transport: binary/1022 forwarding, or legacy JSON/1002 for comparison")
     p.add_argument("--startup-timeout", type=float, default=60, help="Maximum cloud discovery/login/keyframe startup time")
     p.add_argument("--recordings-per-camera", type=int, default=1, help="Newest recordings sampled from the newest available day")
     p.add_argument("--segments-per-recording", type=int, default=3, help="Maximum S3 segments decoded for one recording")
