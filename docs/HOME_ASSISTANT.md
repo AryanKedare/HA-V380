@@ -42,6 +42,12 @@ explicit error, without guessed sources or local-camera fallback.
 
 ## Verification
 
+For 0.1.3, synthetic recovery fixtures exercise the account and portable live
+API: expired-token relogin, concurrent request sharing, one device-credential
+refresh, bounded relay reconnects, video-stall detection and keyframe resumption.
+Invalid camera credentials remain separate from cloud-account reauthentication.
+Real Home Assistant timeout recovery has not yet been verified.
+
 For 0.1.2, the adapter's portable API streams independently encrypted H.264
 through binary login and mode-1022 forwarding in an offline fixture, then
 releases its session. This uses the actual `V380CloudClient.async_live_frames`

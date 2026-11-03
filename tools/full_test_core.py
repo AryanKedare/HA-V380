@@ -23,7 +23,7 @@ import types
 from urllib.parse import quote, urljoin, urlsplit
 
 DEPENDENCIES = "aiohttp cryptography av certifi"
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 _MODULES = ("errors", "shared", "account", "live", "mpegts", "recordings")
 _PROTOCOL = None
 
@@ -235,6 +235,7 @@ async def live_check(client, device, args, index):
         result = await asyncio.to_thread(decode_video, bytes(data), format="mpegts")
         result["received_access_units"] = received
         result["transport"] = "remote_cloud_relay_forwarded" if selected_transport == "forwarded" else "remote_cloud_relay"
+        result["live_reconnects"] = transport.reconnect_count
         if transport.login_protocol_version is not None:
             result["login_protocol_version"] = transport.login_protocol_version
         save_sample(args, f"camera-{index:03d}-live.ts", data)

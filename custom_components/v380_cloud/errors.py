@@ -14,7 +14,7 @@ class CloudError(Exception):
         "request_mismatch", "invalid_result", "login_rejected", "missing_session",
         "media_version_unsupported", "relay_rejected", "media_packet_invalid",
         "video_key_invalid", "packet_type_unsupported", "invalid_metadata",
-        "session_failed",
+        "session_failed", "codec_changed",
     })
 
     def __init__(self, message: str = "Cloud service request failed", *, stage: str | None = None,

@@ -56,14 +56,30 @@ class V380CloudClient(AccountClient):
 
     async def async_live_frames(self, device_id: str) -> AsyncIterator[Frame]:
         device = await self._device(device_id)
-        live = ForwardedCloudLiveClient(device.metadata, device_password(device.metadata), audio=False)
-        self._live_sessions.add(live)
-        try:
-            async for frame in live.async_frames():
-                yield frame
-        finally:
-            await live.async_close()
-            self._live_sessions.discard(live)
+        for credential_attempt in range(2):
+            live = ForwardedCloudLiveClient(device.metadata, device_password(device.metadata), audio=False)
+            self._live_sessions.add(live)
+            frames = live.async_frames()
+            try:
+                async for frame in frames:
+                    yield frame
+                return
+            except AuthError as err:
+                if err.diagnostic.get("stage") != "device_login_response":
+                    raise
+                if credential_attempt:
+                    # Camera credentials are separate from the cloud account.
+                    # Refresh once, then report a device error without starting
+                    # an unrelated account-password reauthentication flow.
+                    raise CloudError("The camera rejected its refreshed device credentials",
+                        stage="device_login_response", reason="login_rejected",
+                        code=err.diagnostic.get("code"), error_id=err.diagnostic.get("error_id")) from err
+            finally:
+                await frames.aclose()
+                await live.async_close()
+                self._live_sessions.discard(live)
+            await self.async_devices()
+            device = await self._device(device_id)
 
     def _recordings(self) -> Any:
         if self._recordings_client is None:

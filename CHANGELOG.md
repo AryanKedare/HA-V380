@@ -1,5 +1,27 @@
 # Changes
 
+## 0.1.3 — 3 November 2026
+
+- Recover expired account tokens automatically using saved credentials, with
+  one retry and a shared login for concurrent requests. Fall back to saved
+  credentials if token renewal is rejected; retain real password reauthentication.
+- Reconnect interrupted live sessions with a fresh device login, three bounded
+  retries, backoff and keyframe resumption. Detect video stalls even when audio
+  continues. Close old sessions before retrying and stop recovery on unload.
+- Refresh camera credentials once after device-login rejection. Persistent
+  device rejection no longer starts an unrelated cloud-password prompt.
+- Standalone tester 1.3.0 uses the same recovery and reports live reconnect count.
+- Add `install.sh` with a pinned 0.1.3 default, configurable Home Assistant
+  path/ref, offline source support, staged replacement, backups and rollback.
+- Add isolated installer tests for fresh installs, upgrades, failure recovery,
+  config preservation, download failures, and curl/wget download paths.
+- Offline checks: 41 forwarding/API/video/recovery tests passed, one loopback
+  test skipped; eight installer tests and the standalone self-test passed.
+
+Automatic recovery has synthetic coverage; real Home Assistant playback and
+long-running reconnection still need validation. The historical adapter-test
+shutdown crash remains unresolved.
+
 ## 0.1.2 — 3 November 2026
 
 - Use binary device login and mode-1022 cloud forwarding for Home Assistant

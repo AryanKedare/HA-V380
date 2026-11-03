@@ -1,4 +1,4 @@
-# V380 Cloud for Home Assistant — experimental 0.1.2
+# V380 Cloud for Home Assistant — experimental 0.1.3
 
 A custom Home Assistant integration built from static analysis of the supplied
 V380 Pro **2.2.90** APKs. It signs in to the V380 cloud account, creates camera
@@ -20,6 +20,27 @@ The Home Assistant adapter tests also have an unresolved interpreter shutdown
 crash, described below. This is a development build for controlled testing.
 
 ## Install
+
+Download [install.sh](install.sh) and run it in your Home Assistant terminal:
+
+```sh
+sh install.sh --config-dir /config
+```
+
+The installer downloads the pinned 0.1.3 commit by default. It needs `curl`
+or `wget` and `unzip`. Change `--config-dir` for a different configuration path;
+the directory must already contain `configuration.yaml`. Existing component
+files are backed up under `.v380-cloud-backups` in that config directory.
+Installation is staged before replacement, and a failed replacement restores
+the previous component. Restart Home Assistant afterward and keep the existing
+integration entry.
+
+For an offline install from an extracted repository, use
+`sh install.sh --source . --config-dir /config`. To choose another GitHub branch,
+tag or commit, use `--ref REF` instead of `--source`. The installer does not
+request credentials or change `configuration.yaml` or saved integration entries.
+
+To install manually:
 
 1. Download and extract this repository using **Code → Download ZIP**, or clone it:
 
@@ -53,7 +74,7 @@ python3 -m venv .venv
 ```
 
 If the camera has no cloud recordings, use
-`.venv/bin/python v380_full_test.py --live-only`. Tester 1.2.0 uses the same
+`.venv/bin/python v380_full_test.py --live-only`. Tester 1.3.0 uses the same
 forwarding transport as the integration by default. For protocol comparison,
 `--live-transport legacy` selects the older JSON/1002 path. Failures retain
 bounded stage/result diagnostics; no response bodies or credentials are printed.
@@ -79,6 +100,20 @@ Home Assistant fetches the remote cloud relay, decrypts supported compressed
 video, and serves it through its normal streaming component. Live audio is
 currently omitted. H.264 is the best-supported browser format; H.265 depends on
 the browser and device. Multi-lens panorama reconstruction is not implemented.
+
+Automatic authentication recovery is enabled without an extra setting. When
+an account token expires, the integration signs in once with the credentials
+already saved in Home Assistant and retries the request. Concurrent requests
+share that login. If the saved password is rejected, Home Assistant still asks
+you to reauthenticate.
+
+Live sessions reconnect after temporary network failures and a 15-second video
+stall, using a fresh device login. Recovery allows three consecutive retries
+with 1/2/4-second delays and resumes video only from a keyframe. Thirty seconds
+of healthy video restores the retry budget. A device-password rejection refreshes
+cloud camera credentials once; it does not immediately prompt for your cloud
+account password. Long outages, codec changes and unsupported firmware still
+stop playback. Real Home Assistant recovery needs testing on your installation.
 
 ## Browse saved cloud footage
 
@@ -110,6 +145,7 @@ not change the camera's settings.
 | Login rejected | Check the regular cloud account/password and phone account format. Social login is not implemented. |
 | Camera appears but live transport is unsupported | The account may contain a newer key-exchange camera. Its live protocol needs further work; check recordings separately. |
 | Live fails to start | Regional routing, firmware framing or device authentication may differ. Capture the error and camera software/firmware version for diagnosis. |
+| Live repeatedly times out | Install 0.1.3 and restart Home Assistant. Automatic token recovery and relay reconnects are enabled. If playback still stops, capture the exact Home Assistant error line. |
 | Recording requires legacy HTTP | Use the explicit Reconfigure preference described above. |
 | No dates | Confirm this account can view saved cloud recordings in V380 Pro. |
 | Recording opens but browser cannot decode it | Try a browser/device supporting its codec. Recordings are not transcoded. |
@@ -157,9 +193,12 @@ shutdown/garbage collection. The crash reproduces with Python 3.14.0, 3.14.2 and
 3.14.8 on this macOS host; its cause is unresolved. It must not be presented as
 a clean full-suite pass or attributed to an outdated Python runtime.
 
-The current forwarding/API/video checks complete with 21 tests passed and one
-loopback test skipped by sandbox restrictions. The standalone self-test also
-passes. The Home Assistant adapter suite was not rerun in this environment.
+The current forwarding/API/video and recovery checks complete with 41 tests
+passed and one loopback test skipped by sandbox restrictions. Eight installer
+tests also pass. Recovery fixtures exercise token expiry, concurrent login,
+device-credential refresh, video stalls, bounded retries and keyframe resumption.
+The standalone self-test also passes. The Home Assistant adapter suite was not
+rerun in this environment.
 
 The user-run report establishes direct cloud playback on the camera listed
 above. Home Assistant/browser playback, reconnect behavior, long-running source
