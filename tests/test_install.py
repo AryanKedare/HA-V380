@@ -26,7 +26,7 @@ class InstallerTests(unittest.TestCase):
         self.source = self.root / 'source checkout'
         self.component = self.source / 'custom_components/v380_cloud'
         self.component.mkdir(parents=True)
-        (self.component / 'manifest.json').write_text(json.dumps({'domain': 'v380_cloud', 'version': '0.1.2'}, indent=2))
+        (self.component / 'manifest.json').write_text(json.dumps({'domain': 'v380_cloud', 'version': '0.1.3'}, indent=2))
         for name in ('__init__.py', 'api.py', 'live.py'):
             (self.component / name).write_text('# new component\n')
         (self.component / 'translations').mkdir()
@@ -55,7 +55,7 @@ class InstallerTests(unittest.TestCase):
         (self.target / '.hidden').write_text('preserve in backup\n')
 
     def assert_new_install(self):
-        self.assertEqual(json.loads((self.target / 'manifest.json').read_text())['version'], '0.1.2')
+        self.assertEqual(json.loads((self.target / 'manifest.json').read_text())['version'], '0.1.3')
         self.assertTrue((self.target / 'translations/en.json').is_file())
         self.assertFalse((self.target / '__pycache__').exists())
         self.assertFalse((self.target.parent / '.v380-cloud-install.lock').exists())
@@ -91,7 +91,7 @@ with open(os.environ['V380_TEST_URL_LOG'], 'w') as output:
     def test_fresh_offline_install_accepts_paths_with_spaces_and_removes_bytecode(self):
         result = self.run_installer('--source', self.source, '--config-dir', self.config)
         self.assert_new_install()
-        self.assertIn('Installed V380 Cloud 0.1.2', result.stdout)
+        self.assertIn('Installed V380 Cloud 0.1.3', result.stdout)
         self.assertFalse((self.config / '.v380-cloud-backups').exists())
 
     def test_upgrade_preserves_complete_backup_and_other_integrations(self):
@@ -146,18 +146,18 @@ exec ''' + repr(real_mv) + ''' "$@"
         self.assertTrue(lock.is_dir())
         self.assertEqual((self.target / 'old.py').read_text(), 'old component\n')
 
-    def test_curl_download_installs_pinned_verified_commit(self):
+    def test_curl_download_installs_pinned_commit(self):
         env = self.download_environment('curl')
         self.run_installer(env=env)
         self.assert_new_install()
         self.assertEqual((self.root / 'download-url.txt').read_text(),
-            'https://api.github.com/repos/AryanKedare/HA-V380/zipball/01ea6a41ce62d1dd3406915e33b52f07eab28ffe')
+            'https://api.github.com/repos/AryanKedare/HA-V380/zipball/a7f1313f3ede38f08aa1319575eb09b12181f5f6')
 
     def test_wget_fallback_accepts_branch_ref(self):
         env = self.download_environment('wget')
-        self.run_installer('--ref', 'release/test-0.1.2', env=env)
+        self.run_installer('--ref', 'release/test-0.1.3', env=env)
         self.assert_new_install()
-        self.assertTrue((self.root / 'download-url.txt').read_text().endswith('/zipball/release%2Ftest-0.1.2'))
+        self.assertTrue((self.root / 'download-url.txt').read_text().endswith('/zipball/release%2Ftest-0.1.3'))
 
     def test_failed_download_leaves_existing_component_untouched(self):
         self.old_install()
