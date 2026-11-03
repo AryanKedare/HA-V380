@@ -148,7 +148,7 @@ def test_manifest_and_user_flow(tmp_path):
         async with _hass(tmp_path) as hass:
             integration = await loader.async_get_integration(hass, DOMAIN)
             assert integration.manifest["config_flow"] is True
-            assert integration.manifest["version"] == "0.1.2"
+            assert integration.manifest["version"] == "0.1.3"
             assert set(integration.dependencies) == {"http", "media_source", "stream"}
             flow = _flow(hass)
             result = await flow.async_step_user()

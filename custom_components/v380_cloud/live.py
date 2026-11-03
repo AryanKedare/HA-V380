@@ -202,6 +202,11 @@ class CloudLiveClient:
 
     fragment_limit = 8000
     acknowledge_fragments = True
+    reconnect_delays = (1.0, 2.0, 4.0)
+    retry_reset_after = 30.0
+    startup_timeout = 60.0
+    # Start recovery before HA's 30-second source-read timeout expires.
+    video_timeout = 15.0
 
     def __init__(
         self,
@@ -235,6 +240,9 @@ class CloudLiveClient:
         self.timeout = timeout
         self.audio = audio
         self.login_protocol_version: int | None = None
+        self.reconnect_count = 0
+        self._last_relay: str | None = None
+        self._close_event = asyncio.Event()
         self._writer: asyncio.StreamWriter | None = None
 
     async def _open(self, host: str, port: int) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
@@ -372,8 +380,67 @@ class CloudLiveClient:
             raise self._transport_error(err, stage) from err
 
     async def async_frames(self) -> AsyncIterator[Frame]:
-        """Yield decrypted compressed frames over a source-backed cloud relay."""
+        """Reauthenticate after temporary relay failures and resume at a keyframe."""
+        failures = 0
+        codec: str | None = None
+        loop = asyncio.get_running_loop()
+        while not self._close_event.is_set():
+            session = self._async_session_frames()
+            needs_keyframe = True
+            healthy_since: float | None = None
+            deadline = loop.time() + (self.startup_timeout if codec is None else self.video_timeout)
+            try:
+                while not self._close_event.is_set():
+                    try:
+                        async with asyncio.timeout_at(deadline):
+                            frame = await anext(session)
+                    except StopAsyncIteration:
+                        return
+                    except TimeoutError as err:
+                        raise CloudError("V380 live video stopped arriving", stage="media_stream",
+                                         reason="network_timeout") from err
+                    video = frame.codec in ("h264", "hevc", "h265")
+                    if needs_keyframe:
+                        if not video or not frame.keyframe:
+                            continue
+                        if codec is not None and frame.codec != codec:
+                            raise UnsupportedError("The camera changed codec during reconnection",
+                                                   stage="media_stream", reason="codec_changed")
+                        codec, needs_keyframe = frame.codec, False
+                    if video:
+                        now = loop.time()
+                        deadline = now + self.video_timeout
+                        if healthy_since is None:
+                            healthy_since = now
+                        elif now - healthy_since >= self.retry_reset_after:
+                            failures = 0
+                    yield frame
+                return
+            except (AuthError, UnsupportedError):
+                raise
+            except CloudError as err:
+                if self._close_event.is_set():
+                    return
+                if (err.diagnostic.get("detail") not in {
+                        "network_timeout", "connection_failed", "incomplete_response", "dns_failed"}
+                        or failures >= len(self.reconnect_delays)):
+                    raise
+                delay = self.reconnect_delays[failures]
+                failures += 1
+                self.reconnect_count += 1
+            finally:
+                await session.aclose()
+            try:
+                await asyncio.wait_for(self._close_event.wait(), delay)
+                return
+            except TimeoutError:
+                pass
+
+    async def _async_session_frames(self) -> AsyncIterator[Frame]:
+        """Yield frames from one authenticated relay session."""
         relays = await self.async_relays()
+        if self._last_relay in relays:
+            relays = [self._last_relay] + [host for host in relays if host != self._last_relay]
         last_error: Exception | None = None
         attempts: list[dict[str, Any]] = []
         for host in relays:
@@ -412,6 +479,8 @@ class CloudLiveClient:
                             await writer.drain()
                             last_ack = now
                         if frame is not None:
+                            if frame.keyframe and frame.codec in ("h264", "hevc", "h265"):
+                                self._last_relay = host
                             emitted = True
                             yield frame
                     elif marker == 0x2F:
@@ -453,6 +522,7 @@ class CloudLiveClient:
         raise CloudError("No V380 cloud relay could start this camera")
 
     async def async_close(self) -> None:
+        self._close_event.set()
         if self._writer is not None:
             await self._close(self._writer)
             self._writer = None

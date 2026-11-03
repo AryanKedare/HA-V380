@@ -128,6 +128,8 @@ class AccountClient:
         self.account_metadata: dict[str, Any] = {}
         self.devices: dict[str, CloudDevice] = {}
         self._auth_lock = asyncio.Lock()
+        self._auth_generation = 0
+        self._credentials_rejected = False
         self._login_at = 0.0
         self._closed = False
 
@@ -184,38 +186,76 @@ class AccountClient:
 
     async def async_login(self) -> str:
         async with self._auth_lock:
+            self._credentials_rejected = False
+            return await self._login_locked()
+
+    async def _login_locked(self) -> str:
+        """Sign in with saved credentials while the caller owns _auth_lock."""
+        if self._credentials_rejected:
+            raise AuthError("V380 rejected the saved account credentials")
+        try:
             response = await self._request_json(API_BASE + "user/login", login_request(
                 self.username, self._password, int(time.time())
             ))
             self._check_result(response, login=True)
-            data = response.get("data")
-            if not isinstance(data, dict) or not isinstance(data.get("access_token"), str):
-                raise CloudError("Cloud login did not return an access token")
-            uid = data.get("user_id")
-            if not isinstance(uid, int) or uid <= 0 or not data["access_token"]:
-                raise CloudError("Cloud login did not return a valid account identity")
-            if self.account_id and self.account_id != str(uid):
-                raise AuthError("The cloud session changed account identity")
-            self.user_id = uid
-            self.account_id = str(uid)
-            self.access_token = data["access_token"]
-            self.user_position = str(response.get("user_position") or "")
-            self.account_metadata = data
-            self._login_at = time.monotonic()
-            return self.account_id
+        except AuthError:
+            self._credentials_rejected = True
+            raise
+        if self._closed:
+            raise CloudError("Cloud session is closed")
+        data = response.get("data")
+        if not isinstance(data, dict) or not isinstance(data.get("access_token"), str):
+            raise CloudError("Cloud login did not return an access token")
+        uid = data.get("user_id")
+        if type(uid) is not int or uid <= 0 or not data["access_token"]:
+            raise CloudError("Cloud login did not return a valid account identity")
+        if self.account_id and self.account_id != str(uid):
+            self._credentials_rejected = True
+            raise AuthError("The cloud session changed account identity")
+        self.user_id = uid
+        self.account_id = str(uid)
+        self.access_token = data["access_token"]
+        self.user_position = str(response.get("user_position") or "")
+        self.account_metadata = data
+        self._login_at = time.monotonic()
+        self._auth_generation += 1
+        return self.account_id
 
     async def _ensure_login(self) -> None:
-        if not self.access_token:
-            await self.async_login()
+        async with self._auth_lock:
+            if self._closed:
+                raise CloudError("Cloud session is closed")
+            if not self.access_token:
+                await self._login_locked()
+
+    async def _recover_login(self, generation: int) -> None:
+        """Recover one rejected token; concurrent requests share the new login."""
+        async with self._auth_lock:
+            if self._closed:
+                raise CloudError("Cloud session is closed")
+            if self.access_token and self._auth_generation != generation:
+                return
+            self.access_token = ""
+            await self._login_locked()
 
     async def async_devices(self) -> list[CloudDevice]:
-        await self._ensure_login()
-        response = await self._request_json(API_BASE + "device/list", devices_request(
-            self.access_token, int(time.time())
-        ))
-        self._check_result(response, allow_partial_devices=True)
+        for attempt in range(2):
+            await self._ensure_login()
+            generation = self._auth_generation
+            try:
+                response = await self._request_json(API_BASE + "device/list", devices_request(
+                    self.access_token, int(time.time())
+                ))
+                if self._closed:
+                    raise CloudError("Cloud session is closed")
+                self._check_result(response, allow_partial_devices=True)
+                break
+            except AuthError:
+                if attempt:
+                    raise
+                await self._recover_login(generation)
         if response.get("renew_token") is True:
-            await self._renew_token()
+            await self._renew_token(generation)
         rows = response.get("data")
         shared = response.get("data_share")
         if rows is None:
@@ -243,19 +283,31 @@ class AccountClient:
         self.devices = devices
         return list(devices.values())
 
-    async def _renew_token(self) -> None:
+    async def _renew_token(self, generation: int | None = None) -> None:
         async with self._auth_lock:
+            if self._closed:
+                raise CloudError("Cloud session is closed")
+            if generation is not None and self._auth_generation != generation:
+                return
             timestamp = int(time.time())
-            response = await self._request_json(API_BASE + "user/get-new-token", {
-                "accesstoken": self.access_token,
-                "timestamp": timestamp,
-                "sign": md5(f"accesstoken={self.access_token}&timestamp={timestamp}{_APP_SIGN_SUFFIX}"),
-            })
-            self._check_result(response)
+            try:
+                response = await self._request_json(API_BASE + "user/get-new-token", {
+                    "accesstoken": self.access_token,
+                    "timestamp": timestamp,
+                    "sign": md5(f"accesstoken={self.access_token}&timestamp={timestamp}{_APP_SIGN_SUFFIX}"),
+                })
+                self._check_result(response)
+            except AuthError:
+                self.access_token = ""
+                await self._login_locked()
+                return
+            if self._closed:
+                raise CloudError("Cloud session is closed")
             token = response.get("access_token")
             if not isinstance(token, str) or not token:
                 raise CloudError("Cloud token renewal has an unsupported response")
             self.access_token = token
+            self._auth_generation += 1
 
     async def async_close(self) -> None:
         self._closed = True

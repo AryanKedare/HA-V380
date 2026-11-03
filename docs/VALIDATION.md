@@ -1,6 +1,20 @@
 # Validation status — 3 November 2026
 
-## Current 0.1.2 results
+## Current 0.1.3 results
+
+The user reports repeated timeouts in Home Assistant live playback. Version
+0.1.3 adds saved-credential recovery for expired account tokens and rejected
+renewal, shared login across concurrent requests, and one camera-credential
+refresh after device-login rejection. Live transport retries temporary network
+failures three times with backoff and resumes only at a keyframe; a video
+watchdog prevents audio/control traffic from hiding a stalled picture.
+
+Twenty isolated recovery tests pass using synthetic account and relay sessions.
+They cover rejected passwords, account identity, concurrent requests, unload,
+device/account error separation, retry limits, healthy-session budget reset,
+video stalls and codec changes. Eight installer tests pass with mocked downloads.
+These checks make no vendor requests. Recovery is not yet validated in an
+installed Home Assistant; the real-camera result below was obtained with 0.1.2.
 
 The user ran the binary-forwarding tester locally against a real account and
 one AWT3710D camera. The sanitized report records successful account login and
@@ -15,7 +29,7 @@ The JSON/1002 path remains available in the standalone tester for comparison.
 Its earlier code-100/status-1/byte-13 reply is not accepted by relaxing the
 legacy check; the working forwarding path has separate reply semantics.
 
-Current offline checks complete with 21 tests passed and one loopback test
+Current offline checks complete with 41 tests passed and one loopback test
 skipped because the sandbox cannot bind sockets. Coverage includes binary
 packet offsets and credentials, fragmented 26/256/412-byte replies, real H.264
 decoding with both selective-AES modes, corrupt-media and rejection handling,
