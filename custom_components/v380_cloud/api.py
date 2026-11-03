@@ -9,7 +9,7 @@ import aiohttp
 
 from .account import AccountClient, CloudDevice, CloudRecording, device_password
 from .errors import AuthError, CloudError, UnsupportedError
-from .live import CloudLiveClient, Frame
+from .live import ForwardedCloudLiveClient, Frame
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -24,7 +24,7 @@ class V380CloudClient(AccountClient):
         self.allow_insecure_http = allow_insecure_http
         self._hass: HomeAssistant | None = None
         self._entry_id = ""
-        self._live_sessions: set[CloudLiveClient] = set()
+        self._live_sessions: set[ForwardedCloudLiveClient] = set()
         self._media_tasks: set[asyncio.Task[Any]] = set()
         self._recordings_client: Any = None
 
@@ -56,7 +56,7 @@ class V380CloudClient(AccountClient):
 
     async def async_live_frames(self, device_id: str) -> AsyncIterator[Frame]:
         device = await self._device(device_id)
-        live = CloudLiveClient(device.metadata, device_password(device.metadata), audio=False)
+        live = ForwardedCloudLiveClient(device.metadata, device_password(device.metadata), audio=False)
         self._live_sessions.add(live)
         try:
             async for frame in live.async_frames():

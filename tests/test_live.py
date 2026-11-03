@@ -50,6 +50,26 @@ def fragment(payload: bytes, count: int, index: int) -> bytes:
 
 
 class CodecTests(unittest.TestCase):
+    def test_legacy_reply_stays_strict_and_preserves_numeric_diagnostics(self):
+        def response(command=401, result=100, status=4, version=21):
+            header = bytearray(32)
+            struct.pack_into("<Iii", header, 0, command, result, status)
+            header[12] = version
+            return bytes(header)
+
+        with self.assertRaises(live.CloudError) as caught:
+            live.parse_relay_response(response())
+        self.assertEqual(caught.exception.diagnostic, {
+            "stage": "relay_handshake", "detail": "relay_rejected", "code": 100,
+            "protocol_version": 21, "relay_command": 401, "relay_status": 4})
+        self.assertEqual(live.parse_relay_response(response(result=1001)), 21)
+        for fields in ({"command": 200, "result": 1001}, {"result": 1002},
+                       {"result": -11}, {"result": -12}, {"result": 1001, "version": 20}):
+            with self.subTest(fields=fields), self.assertRaises(live.CloudError):
+                live.parse_relay_response(response(**fields))
+        with self.assertRaises(live.CloudError):
+            live.parse_relay_response(bytes(31))
+
     def test_native_key_layout_and_selective_decryption(self):
         key = live.media_key(0x12345678)
         self.assertEqual(key.hex(), "785634125c79142c46238161f00d8082")

@@ -43,7 +43,7 @@ async def run(args):
             report["camera_count"] = len(devices)
             for index, device in enumerate(devices, 1):
                 item = {"index": index, "cloud_live_protocol": "new_key_exchange_unsupported"
-                        if int(device.metadata.get("type", 0)) >= 2 else "legacy_relay_implemented"}
+                        if int(device.metadata.get("type", 0)) >= 2 else "forwarded_cloud_implemented"}
                 report["cameras"].append(item)
                 if index != args.camera:
                     continue
@@ -51,7 +51,7 @@ async def run(args):
                     transport = None
                     frames = None
                     try:
-                        transport = live.CloudLiveClient(device.metadata, account.device_password(device.metadata), audio=False)
+                        transport = live.ForwardedCloudLiveClient(device.metadata, account.device_password(device.metadata), audio=False)
                         frames = transport.async_frames()
                         async with asyncio.timeout(90):
                             async for frame in frames:

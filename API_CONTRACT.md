@@ -1,7 +1,8 @@
 # Home Assistant adapter contract
 
-This adapter targets Home Assistant Core 2026.10.2. It is experimental and does
-not establish that live video or recordings work against an actual V380 account.
+This adapter targets Home Assistant Core 2026.10.2. It remains experimental.
+Direct cloud live decoding is user-confirmed on one AWT3710D camera; Home
+Assistant/browser playback and saved recordings remain unverified.
 The protocol client must supply genuine playable sources; unsupported variants
 must raise `UnsupportedError` rather than return guessed or placeholder URLs.
 

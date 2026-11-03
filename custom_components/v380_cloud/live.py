@@ -1,9 +1,11 @@
-"""Portable legacy V380 cloud relay transport, recovered from the supplied APK.
+"""Portable V380 legacy cloud transports.
 
 Static sources: classes9.dex DispatchServerGetter / LoginHelper / Functions;
 libhsMediaLibrary.so HSLiveDataV2Transmitter and libaes.so media_data_decrypt.
+The binary 1022 forwarding path follows the source reference below and was
+validated by a user-run AWT3710D live decode; it is the HA adapter's default.
 The newer MQTT/key-exchange platform is deliberately reported unsupported.
-No camera, LAN discovery or Android native library is required.
+No LAN discovery or Android native library is required.
 """
 from __future__ import annotations
 
@@ -110,6 +112,28 @@ def relay_request(device_id: int, domain: str, port: int, handle: int, session: 
     return bytes(packet)
 
 
+def parse_relay_response(response: bytes) -> int:
+    """Validate the legacy 1002 reply without applying forwarding semantics."""
+    if len(response) != 32:
+        raise CloudError("Invalid cloud relay response framing",
+                         stage="relay_handshake", reason="invalid_framing")
+    command, result, status = struct.unpack_from("<Iii", response)
+    media_version = response[12]
+    diagnostic = dict(stage="relay_handshake", code=result,
+                      relay_command=command, relay_status=status,
+                      protocol_version=media_version)
+    if command != 401:
+        raise CloudError("Invalid cloud relay response command",
+                         reason="invalid_framing", **diagnostic)
+    if result != 1001:
+        raise CloudError("The cloud relay did not accept the video session",
+                         reason="relay_rejected", **diagnostic)
+    if media_version < 21:
+        raise UnsupportedError("This camera's old media framing is not supported",
+                               reason="media_version_unsupported", **diagnostic)
+    return media_version
+
+
 @dataclass(frozen=True, slots=True)
 class Frame:
     payload: bytes
@@ -122,10 +146,12 @@ class Frame:
 class FrameDecoder:
     """Reassemble bounded packet fragments, then decrypt the complete frame."""
 
-    def __init__(self, handle: int, communication_version: int, media_version: int) -> None:
+    def __init__(self, handle: int, communication_version: int, media_version: int,
+                 *, fragment_limit: int = 8000) -> None:
         self.key = media_key(handle)
         self.communication_version = communication_version
         self.media_version = media_version
+        self.fragment_limit = fragment_limit
         self._parts: list[bytes] = []
         self._total = 0
         self._next = 0
@@ -135,7 +161,7 @@ class FrameDecoder:
         if len(header) != 12 or header[0] != 0x7F:
             raise CloudError("Invalid cloud media packet")
         total, current, length = struct.unpack_from("<HHH", header, 3)
-        if not total or current >= total or length != len(payload) or length > 8000:
+        if not total or current >= total or length != len(payload) or length > self.fragment_limit:
             raise CloudError("Invalid cloud media fragment bounds")
         if current == 0:
             self._parts = []
@@ -174,6 +200,9 @@ class FrameDecoder:
 class CloudLiveClient:
     """A one-viewer cloud session; the caller consumes and closes async_frames."""
 
+    fragment_limit = 8000
+    acknowledge_fragments = True
+
     def __init__(
         self,
         metadata: Mapping[str, Any],
@@ -205,6 +234,7 @@ class CloudLiveClient:
         self.relay_port = relay_port
         self.timeout = timeout
         self.audio = audio
+        self.login_protocol_version: int | None = None
         self._writer: asyncio.StreamWriter | None = None
 
     async def _open(self, host: str, port: int) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
@@ -322,6 +352,25 @@ class CloudLiveClient:
             if writer is not None:
                 await self._close(writer)
 
+    async def _start_relay(self, host: str, login: Mapping[str, Any]) -> tuple[asyncio.StreamReader, int]:
+        stage = "relay_connect"
+        try:
+            reader, writer = await self._open(host, self.relay_port)
+            self._writer = writer
+            stage = "relay_handshake"
+            handle, session = int(login["handle"]), int(login["session"])
+            writer.write(relay_request(self.device_id, self.domain, self.camera_port, handle, session, audio=self.audio))
+            await writer.drain()
+            response = await self._read(reader, 32)
+            media_version = parse_relay_response(response)
+            # SDK V2 expects 256 bytes of login response for v21+ devices.
+            await self._read(reader, 224)
+            writer.write(struct.pack("<II", 303, 0x3001).ljust(256, b"\x00"))
+            await writer.drain()
+            return reader, media_version
+        except (OSError, TimeoutError, asyncio.IncompleteReadError) as err:
+            raise self._transport_error(err, stage) from err
+
     async def async_frames(self) -> AsyncIterator[Frame]:
         """Yield decrypted compressed frames over a source-backed cloud relay."""
         relays = await self.async_relays()
@@ -329,31 +378,20 @@ class CloudLiveClient:
         attempts: list[dict[str, Any]] = []
         for host in relays:
             emitted = False
+            self.login_protocol_version = None
             stage = "device_login_connect"
             try:
                 login = await self._login(host)
+                login_version = int(login.get("version", 0))
+                if 0 <= login_version <= 255:
+                    self.login_protocol_version = login_version
                 stage = "relay_connect"
-                reader, writer = await self._open(host, self.relay_port)
-                self._writer = writer
-                stage = "relay_handshake"
+                reader, media_version = await self._start_relay(host, login)
+                writer = self._writer
+                assert writer is not None
                 handle, session = int(login["handle"]), int(login["session"])
-                writer.write(relay_request(self.device_id, self.domain, self.camera_port, handle, session, audio=self.audio))
-                await writer.drain()
-                response = await self._read(reader, 32)
-                command, result, _status = struct.unpack_from("<III", response)
-                media_version = response[12]
-                if command != 401 or result != 1001:
-                    raise CloudError("The cloud relay rejected the video session", stage=stage,
-                                     reason="relay_rejected", code=result)
-                if media_version < 21:
-                    raise UnsupportedError("This camera's old media framing is not supported", stage=stage,
-                                           reason="media_version_unsupported", protocol_version=media_version)
-                # SDK V2 expects 256 bytes of login response for v21+ devices.
-                await self._read(reader, 224)
-                start = struct.pack("<II", 303, 0x3001).ljust(256, b"\x00")
-                writer.write(start)
-                await writer.drain()
-                decoder = FrameDecoder(handle, int(login.get("version", 31)), media_version)
+                decoder = FrameDecoder(handle, int(login.get("version", 31)), media_version,
+                                       fragment_limit=self.fragment_limit)
                 stage = "media_stream"
                 received_fragments = 0
                 last_ack = asyncio.get_running_loop().time()
@@ -362,12 +400,12 @@ class CloudLiveClient:
                     marker = header[0]
                     if marker == 0x7F:
                         length = struct.unpack_from("<H", header, 7)[0]
-                        if length > 8000:
+                        if length > self.fragment_limit:
                             raise CloudError("The cloud relay sent an oversized fragment")
                         frame = decoder.feed(header, await self._read(reader, length))
                         received_fragments += 1
                         # Native V2 acknowledges each 30 fragments, command5005.
-                        if received_fragments % 30 == 0:
+                        if self.acknowledge_fragments and received_fragments % 30 == 0:
                             now = asyncio.get_running_loop().time()
                             elapsed = int((now - last_ack) * 1000) & 0xFFFF
                             writer.write(struct.pack("<IHH", 5005, received_fragments & 0xFFFF, elapsed).ljust(16, b"\x00"))
@@ -397,6 +435,8 @@ class CloudLiveClient:
                 raise
             except (CloudError, OSError, TimeoutError, asyncio.IncompleteReadError, ValueError, TypeError) as err:
                 detail = self._transport_error(err, stage)
+                if self.login_protocol_version is not None:
+                    detail.diagnostic["login_protocol_version"] = self.login_protocol_version
                 attempts.append(dict(detail.diagnostic))
                 detail.relay_attempts = attempts[-14:]
                 if emitted:
@@ -416,3 +456,152 @@ class CloudLiveClient:
         if self._writer is not None:
             await self._close(self._writer)
             self._writer = None
+
+
+def forwarded_login_request(device_id: int, domain: str, port: int, username: str,
+                            password: str, random_key: bytes, *, padded: bool = False) -> bytes:
+    """Binary cloud login (1167/1022), independently described by OpenV380.
+
+    Reference: cimplesid/v380-mac, commit c3f5c5d17f4930fb90546be5d6c335c850975b86,
+    Sources/V380/V380Client.swift authenticate(_:), encryptPassword(_:encoding:).
+    This is a separate forwarding protocol, not a relaxed 1002 reply check.
+    """
+    domain_bytes, username_bytes = domain.encode("ascii"), username.encode("utf-8")
+    password_bytes = password.encode("utf-8")
+    if len(domain_bytes) > 49 or len(username_bytes) > 32 or len(random_key) != 16:
+        raise CloudError("Invalid binary cloud login metadata",
+                         stage="device_credentials", reason="invalid_metadata")
+    if padded:
+        encrypted = random_key + double_encrypt(password_bytes, random_key)[:64]
+    else:
+        if len(password_bytes) > 48:
+            raise CloudError("The binary password requires padded encoding",
+                             stage="device_credentials", reason="invalid_metadata")
+        encrypted = random_key + _aes_ecb(_aes_ecb(password_bytes.ljust(48, b"\x00"), STATIC_KEY), random_key)
+    packet = bytearray(520)
+    struct.pack_into("<II", packet, 0, 1167, 1022)
+    packet[8] = 31
+    struct.pack_into("<II", packet, 9, 1, device_id)
+    packet[17:17 + len(domain_bytes)] = domain_bytes
+    struct.pack_into("<I", packet, 67, port)
+    packet[71:71 + len(username_bytes)] = username_bytes
+    packet[103:103 + len(encrypted)] = encrypted
+    return bytes(packet)
+
+
+class ForwardedCloudLiveClient(CloudLiveClient):
+    """Binary 1022 cloud path; uses only dispatcher-provided relays.
+
+    Account discovery and media cryptography are shared with the legacy client.
+    The 401 reply body is opaque here: byte 12 is not a media-version field in
+    this protocol. Media parameters, when supplied, select the decryption mode.
+    """
+
+    fragment_limit = 20000
+    acknowledge_fragments = False
+    reply_idle_timeout = 0.5
+
+    async def _binary_login(self, host: str, username: str, *, padded: bool) -> dict[str, Any]:
+        writer = None
+        stage = "device_login_connect"
+        try:
+            reader, writer = await self._open(host, self.relay_port)
+            stage = "device_login_response"
+            writer.write(forwarded_login_request(self.device_id, self.domain, self.camera_port,
+                username, self._password, self._random_key(), padded=padded))
+            await writer.drain()
+            command, result = struct.unpack("<ii", await self._read(reader, 8))
+            if command != 1168:
+                raise CloudError("The binary cloud login command is unsupported", stage=stage,
+                                 reason="invalid_framing", code=command)
+            if result != 1001:
+                kind = AuthError if result in (1011, 1012, 1018) else CloudError
+                raise kind("The cloud camera did not accept binary login", stage=stage,
+                           reason="login_rejected", code=result)
+            body = await self._read(reader, 15)  # Through deviceType/camType, offsets 21/22.
+            response = bytes(8) + body
+            version = response[12]
+            if version < 21:
+                raise UnsupportedError("This camera's old frame metadata is unsupported", stage=stage,
+                                       reason="media_version_unsupported", protocol_version=version)
+            handle, session = struct.unpack_from("<II", response, 13)
+            return {"handle": handle, "session": session, "version": version}
+        except (OSError, TimeoutError, asyncio.IncompleteReadError) as err:
+            raise self._transport_error(err, stage) from err
+        finally:
+            if writer is not None:
+                await self._close(writer)
+
+    async def _login(self, host: str) -> dict[str, Any]:
+        # Vary only fields identified by explicit device credential errors.
+        usernames = list(dict.fromkeys((self.username, str(self.device_id))))
+        for username in usernames:
+            encodings = (False, True) if len(self._password.encode("utf-8")) <= 48 else (True,)
+            for padded in encodings:
+                try:
+                    return await self._binary_login(host, username, padded=padded)
+                except AuthError as err:
+                    code = err.diagnostic.get("code")
+                    if code == 1011:
+                        break
+                    if code == 1012 and not padded:
+                        continue
+                    raise
+            else:
+                continue
+            if username == usernames[-1]:
+                raise AuthError("The cloud camera rejected its device username",
+                                stage="device_login_response", reason="login_rejected", code=1011)
+        raise CloudError("The cloud camera could not complete binary login",
+                         stage="device_login_response", reason="login_rejected")
+
+    async def _start_relay(self, host: str, login: Mapping[str, Any]) -> tuple[asyncio.StreamReader, int]:
+        stage = "relay_connect"
+        try:
+            reader, writer = await self._open(host, self.relay_port)
+            self._writer = writer
+            stage = "relay_handshake"
+            # Forwarding mode 1022 routes the camera's native stream protocol.
+            packet = bytearray(256)
+            struct.pack_into("<II", packet, 0, 301, 1022)
+            domain = self.domain.encode("ascii")
+            packet[8:8 + len(domain)] = domain
+            struct.pack_into("<IIII", packet, 58, self.camera_port, self.device_id,
+                             int(login["handle"]) & 0xFFFFFFFF, int(login["session"]) & 0xFFFFFFFF)
+            packet[78] = 20
+            struct.pack_into("<I", packet, 79, 1)
+            writer.write(packet)
+            await writer.drain()
+            command, result = struct.unpack("<Ii", await self._read(reader, 8))
+            if command != 401:
+                raise CloudError("Invalid forwarded stream reply", stage=stage, reason="invalid_framing",
+                                 relay_command=command, code=result)
+            # Stream login has different result semantics from device login.
+            # Actual media validation still follows the positive reply.
+            if result not in (100, 402, 1001):
+                raise CloudError("The forwarded stream session was rejected", stage=stage,
+                                 reason="relay_rejected", relay_command=command, code=result)
+            await self._read(reader, 18)  # Common minimum 401 header is 26 bytes.
+            # Forwarded reply lengths vary (26/256/412). No media is requested
+            # yet. Drain a bounded reply until quiet rather than imposing the
+            # unrelated 1002 fixed 256-byte layout on this path.
+            received = 26
+            while True:
+                try:
+                    extra = await asyncio.wait_for(reader.read(1025 - received),
+                                                   min(self.reply_idle_timeout, self.timeout))
+                except TimeoutError:
+                    break
+                if not extra:
+                    raise asyncio.IncompleteReadError(b"", 1)
+                received += len(extra)
+                if received > 1024:
+                    raise CloudError("The forwarded stream reply exceeds its size limit",
+                                     stage=stage, reason="invalid_framing")
+            writer.write(struct.pack("<II", 303, 0x3001).ljust(256, b"\x00"))
+            await writer.drain()
+            # No relay media version was negotiated. The common selective-AES
+            # mode applies until a real parameter packet selects version 21.
+            return reader, 0
+        except (OSError, TimeoutError, asyncio.IncompleteReadError) as err:
+            raise self._transport_error(err, stage) from err

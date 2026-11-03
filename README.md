@@ -1,12 +1,18 @@
-# V380 Cloud for Home Assistant — experimental 0.1.1
+# V380 Cloud for Home Assistant — experimental 0.1.2
 
 A custom Home Assistant integration built from static analysis of the supplied
 V380 Pro **2.2.90** APKs. It signs in to the V380 cloud account, creates camera
 entities, and exposes saved cloud footage through Home Assistant's Media browser.
 A local camera IP address or Android runtime is not required.
 
-**Compatibility is not yet confirmed with a real V380 account or camera.**
-The remote live transport supports the legacy V380 platform. Newer cameras using
+**Direct cloud live decoding is confirmed on one AWT3710D camera.** A user-run
+test decoded 201 H.264 frames at 640×360 over 10.599 seconds, using device
+protocol 31. The camera runs `AppEV2W_VA3_V1.3.6.1_20231113` software and
+`Hw_AWT3710D_XHR_V1.0_WF_20231113` firmware. Home Assistant/browser playback,
+long-running sessions, recordings and other firmware remain unverified.
+
+Live video now uses binary cloud forwarding (mode 1022), which passed that test.
+The earlier JSON/1002 path failed this camera's stream handshake. Newer cameras using
 MQTT/key exchange (`type >= 2`) are explicitly unsupported for live video.
 Their saved cloud recordings can still be supported independently.
 
@@ -47,9 +53,10 @@ python3 -m venv .venv
 ```
 
 If the camera has no cloud recordings, use
-`.venv/bin/python v380_full_test.py --live-only`. Version 1.1.0 of the tester
-reports the failed live-protocol stage and bounded server result codes instead
-of losing these details behind a generic relay error.
+`.venv/bin/python v380_full_test.py --live-only`. Tester 1.2.0 uses the same
+forwarding transport as the integration by default. For protocol comparison,
+`--live-transport legacy` selects the older JSON/1002 path. Failures retain
+bounded stage/result diagnostics; no response bodies or credentials are printed.
 
 Credentials are prompted locally. The default report contains sanitized results;
 footage is saved only when `--save-media` is supplied. The script reports newer,
@@ -150,8 +157,13 @@ shutdown/garbage collection. The crash reproduces with Python 3.14.0, 3.14.2 and
 3.14.8 on this macOS host; its cause is unresolved. It must not be presented as
 a clean full-suite pass or attributed to an outdated Python runtime.
 
-End-to-end video playback, actual cloud response compatibility, regional
-routing, reconnect behavior and the user's camera model remain unverified.
+The current forwarding/API/video checks complete with 21 tests passed and one
+loopback test skipped by sandbox restrictions. The standalone self-test also
+passes. The Home Assistant adapter suite was not rerun in this environment.
+
+The user-run report establishes direct cloud playback on the camera listed
+above. Home Assistant/browser playback, reconnect behavior, long-running source
+renewal, recordings and other camera models still need verification.
 See [validation notes](docs/VALIDATION.md) and
 [Home Assistant implementation notes](docs/HOME_ASSISTANT.md).
 
