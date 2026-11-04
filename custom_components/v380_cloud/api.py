@@ -15,6 +15,14 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 
+class CameraUnavailableError(CloudError):
+    """The camera is absent from the current account device list."""
+
+
+class PlaybackNotReadyError(CloudError):
+    """The local Home Assistant media proxy has not been bound yet."""
+
+
 class V380CloudClient(AccountClient):
     def __init__(
         self, session: aiohttp.ClientSession, username: str, password: str,
@@ -38,11 +46,11 @@ class V380CloudClient(AccountClient):
         try:
             return self.devices[device_id]
         except KeyError:
-            raise CloudError("The camera is no longer available to this account") from None
+            raise CameraUnavailableError("The camera is no longer available to this account") from None
 
     def _source(self, kind: str, device_id: str, recording_id: str = "") -> str:
         if self._hass is None:
-            raise CloudError("The Home Assistant media proxy has not been initialized")
+            raise PlaybackNotReadyError("The Home Assistant media proxy has not been initialized")
         from .proxy import signed_media_url
         return signed_media_url(self._hass, self._entry_id, kind, device_id, recording_id)
 

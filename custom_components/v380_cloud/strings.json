@@ -67,6 +67,15 @@
     "cloud_unavailable": {
       "message": "V380 Cloud is unavailable or returned an invalid response."
     },
+    "camera_unavailable": {
+      "message": "This camera is missing from the latest V380 cloud device list. Confirm it is available in V380 Pro, then reload the integration."
+    },
+    "playback_not_ready": {
+      "message": "The V380 Home Assistant playback proxy is not ready. Reload the integration."
+    },
+    "camera_credentials_unavailable": {
+      "message": "Camera credentials could not be read from V380 Cloud. Reload the integration to refresh the camera metadata."
+    },
     "unsupported_live": {
       "message": "Live cloud video uses a transport this experimental integration cannot yet play."
     },

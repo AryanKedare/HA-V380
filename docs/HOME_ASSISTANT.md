@@ -21,7 +21,14 @@ and removed cameras become unavailable.
 
 Each entity subclasses `Camera` and returns an authenticated HA proxy source
 from `stream_source`. The native HA stream integration handles playback and
-still images. Ten-minute proxy signatures are refreshed after eight minutes;
+still images through HLS. The camera overrides Core's supported-provider hook
+to decline automatic WebRTC selection for this expiring authenticated MPEG-TS
+source. Core therefore advertises HLS without WebRTC; native WebRTC is not
+implemented. This does not suppress cloud or source-preparation failures.
+Missing camera metadata, an unbound playback proxy and unreadable camera
+credentials have separate error messages.
+
+Ten-minute proxy signatures are refreshed after eight minutes;
 the existing stream receives the renewed source through `Stream.update_source`.
 Source calls share the active URL and do not move its deadline. Reusing an
 existing HA stream checks freshness too, because Core only calls `stream_source`
@@ -50,6 +57,14 @@ Cloud protocol or codec variants not implemented by the client produce an
 explicit error, without guessed sources or local-camera fallback.
 
 ## Verification
+
+For 0.1.5, 20 source/route contracts, 20 auth/relay recovery checks and eight
+installer checks pass. A separate harness executes the exact Core 2026.10.4
+`async_refresh_providers`, supported-provider hook and camera-capability methods
+with synthetic dependencies. It reproduces automatic HTTP provider selection
+on 0.1.4 and confirms only HLS afterward, without provider/source lookups. A real
+HA fixture test was also added for HLS-only capabilities, but the full target HA
+suite and browser session remain unavailable in this environment.
 
 For 0.1.4, 14 offline source/route lifecycle contracts pass with synthetic HA
 interfaces. Real HA fixture tests were extended for non-postponed renewal and

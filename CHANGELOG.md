@@ -1,5 +1,26 @@
 # Changes
 
+## 0.1.5 — 4 November 2026
+
+- Keep V380 cameras on Home Assistant's HLS stream pipeline by declining
+  automatically selected WebRTC providers. The local authenticated MPEG-TS URL
+  requires its source lifecycle to be managed by the HA stream path; native
+  WebRTC is not implemented. Streaming and stream-derived stills remain enabled.
+- Distinguish an absent camera, an uninitialized local playback proxy, and
+  unreadable camera credentials from generic cloud response failures. Preserve
+  genuine account reauthentication and bounded renewal retries.
+- Log only bounded diagnostic fields for source failures, never exception text,
+  credentials, URLs or server responses. Pin the installer to 0.1.5.
+- Offline validation: 20 source/route lifecycle checks, 20 auth/relay recovery
+  checks and eight installer checks pass. A separate contract check runs the
+  exact Core 2026.10.4 provider/capability methods with a synthetic backend.
+
+The user reports Core 2026.10.4 playback stops with a WebRTC source-preparation
+error after 0.1.4 worked initially. This change uses HLS and improves diagnosis;
+it does not establish that a separate cloud or metadata failure is resolved.
+Installed HA/browser playback still needs verification. The portable protocol
+and standalone tester 1.3.0 are unchanged.
+
 ## 0.1.4 — 4 November 2026
 
 - Fix signed Home Assistant live URL renewal: repeated source requests now

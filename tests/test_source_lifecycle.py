@@ -201,6 +201,60 @@ class SourceLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.camera.stream)
         self.assertEqual(self.client.async_live_source.await_count, 1)
 
+    async def test_automatic_webrtc_provider_is_declined_without_source_lookup(self):
+        provider_lookup = AsyncMock()
+        self.assertIsNone(await self.camera._async_get_supported_webrtc_provider(provider_lookup))
+        provider_lookup.assert_not_awaited()
+        self.client.async_live_source.assert_not_awaited()
+        self.assertTrue(self.camera._attr_supported_features & Features.STREAM)
+
+    async def test_specific_source_errors_are_not_mislabeled_as_cloud_response_errors(self):
+        for error, key in (
+            (api.CameraUnavailableError('fixture'), 'camera_unavailable'),
+            (api.PlaybackNotReadyError('fixture'), 'playback_not_ready'),
+            (api.CloudError('fixture', stage='device_credentials', reason='invalid_metadata'),
+             'camera_credentials_unavailable'),
+        ):
+            self.client.async_live_source.side_effect = error
+            with self.assertRaises(HomeAssistantError) as caught:
+                await self.camera.stream_source()
+            self.assertEqual(caught.exception.translation_key, key)
+        self.entry.async_start_reauth.assert_not_called()
+
+    async def test_source_failure_logging_uses_sanitized_diagnostics_only(self):
+        self.client.async_live_source.side_effect = api.CloudError(
+            'private fixture password and authSig=do-not-log', stage='device_credentials', reason='invalid_metadata')
+        with self.assertLogs(camera._LOGGER, level='DEBUG') as logs:
+            with self.assertRaises(HomeAssistantError):
+                await self.camera.stream_source()
+        output = ' '.join(logs.output)
+        self.assertIn('invalid_metadata', output)
+        self.assertNotIn('private fixture', output)
+        self.assertNotIn('authSig', output)
+
+    async def test_missing_camera_metadata_during_renewal_is_retried(self):
+        stream = await self.camera.async_create_stream()
+        original = stream.source
+        self.client.async_live_source.side_effect = api.CameraUnavailableError('fixture')
+        await self.camera._async_refresh_source(self.now)
+        self.assertEqual(stream.source, original)
+        self.assertEqual(self.timer.call_args.args[1], 60)
+        self.entry.async_start_reauth.assert_not_called()
+
+    async def test_api_missing_camera_has_a_specific_cloud_error_subtype(self):
+        client = api.V380CloudClient(None, 'fixture', 'fixture')
+        with patch.object(client, 'async_devices', AsyncMock(return_value=[])):
+            with self.assertRaises(api.CameraUnavailableError):
+                await client.async_live_source('7')
+        await client.async_close()
+
+    async def test_api_unbound_proxy_has_a_specific_cloud_error_subtype(self):
+        client = api.V380CloudClient(None, 'fixture', 'fixture')
+        client.devices['7'] = api.CloudDevice('7', 'fixture', metadata={'device_id': 7})
+        with self.assertRaises(api.PlaybackNotReadyError):
+            await client.async_live_source('7')
+        await client.async_close()
+
 
 class RouteLifecycleTests(unittest.TestCase):
     def hass(self, *, entry=None, runtime=None):

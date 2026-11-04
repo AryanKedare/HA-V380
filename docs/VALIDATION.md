@@ -1,6 +1,41 @@
 # Validation status — 4 November 2026
 
-## Current 0.1.4 results
+## Current 0.1.5 results
+
+The user confirms playback initially worked after 0.1.4, then stopped with
+`Failed to start WebRTC stream` and the generic `cloud_unavailable` translation.
+Their screenshot identifies Core 2026.10.4 on HA OS. The exact underlying source
+failure is not established by that translated message.
+
+The official Core 2026.10.4 camera and go2rtc sources confirm that automatic
+providers are matched by source URL scheme; go2rtc calls `stream_source()` again
+on an offer and forwards its HomeAssistantError to the frontend. Version 0.1.5
+declines automatic providers for the authenticated MPEG-TS source so Core uses
+its shared HLS stream. It also reports absent camera metadata, an uninitialized
+proxy and unreadable camera credentials separately. Generic cloud failures and
+real account authentication errors still propagate.
+
+Current checks pass: 20 offline source/route lifecycle tests with synthetic HA
+interfaces, 20 portable auth/relay recovery tests, and eight installer tests.
+The six added source checks cover provider opt-out without source access,
+source-error classification, sanitized logging, retry after missing metadata,
+and the two API error subtypes.
+
+An additional compatibility harness extracts and executes the exact Core
+2026.10.4 provider/capability methods with a synthetic backend. It reproduces
+automatic WebRTC/HLS capability selection on the prior camera and confirms
+HLS-only capabilities after the patch, without provider/source lookup. This is
+not a full HA installation or browser test. The real HA fixture now includes an
+HLS capability assertion; its target environment remains unavailable. No vendor
+requests or installed HA changes were made. The prior adapter shutdown failure
+remains unresolved. The portable protocol and tester 1.3.0 are unchanged.
+
+Primary references:
+
+- [Core 2026.10.4 camera provider/capability selection](https://github.com/home-assistant/core/blob/2026.10.4/homeassistant/components/camera/__init__.py)
+- [Core 2026.10.4 go2rtc source preparation](https://github.com/home-assistant/core/blob/2026.10.4/homeassistant/components/go2rtc/__init__.py)
+
+## Previous 0.1.4 results
 
 The user confirms HA 0.1.3 playback starts, then fails with local HTTP 404/401.
 Both log lines use the same HA live path and a signature with a ten-minute

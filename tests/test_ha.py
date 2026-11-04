@@ -21,6 +21,7 @@ import pytest
 pytest.importorskip("homeassistant")
 from homeassistant import loader
 from homeassistant.components.camera import CameraEntityFeature
+from homeassistant.components.camera.const import StreamType
 from homeassistant.components.media_player import BrowseError
 from homeassistant.components.media_source import MediaSourceItem, Unresolvable
 from homeassistant.config_entries import (
@@ -148,7 +149,7 @@ def test_manifest_and_user_flow(tmp_path):
         async with _hass(tmp_path) as hass:
             integration = await loader.async_get_integration(hass, DOMAIN)
             assert integration.manifest["config_flow"] is True
-            assert integration.manifest["version"] == "0.1.4"
+            assert integration.manifest["version"] == "0.1.5"
             assert set(integration.dependencies) == {"http", "media_source", "stream"}
             flow = _flow(hass)
             result = await flow.async_step_user()
@@ -382,4 +383,25 @@ def test_camera_refreshes_existing_stream_before_reuse(tmp_path):
                 stream.update_source.assert_called_once_with(client.async_live_source.return_value)
                 assert client.async_live_source.await_count == 2
                 await camera.async_will_remove_from_hass()
+    asyncio.run(run())
+
+
+def test_camera_advertises_hls_without_automatic_webrtc_provider(tmp_path):
+    async def run():
+        async with _hass(tmp_path) as hass:
+            entry = _entry(hass)
+            client = _client()
+            coordinator = V380CloudCoordinator(hass, entry, client)
+            device = client.async_devices.return_value[0]
+            coordinator.async_set_updated_data({device.device_id: device})
+            entry.runtime_data = V380RuntimeData(client, coordinator, "fixture-account")
+            camera = V380CloudCamera(entry, device)
+            camera.hass = hass
+            with patch("homeassistant.components.camera.async_get_supported_provider", new_callable=AsyncMock) as lookup:
+                await camera.async_refresh_providers(write_state=False)
+            lookup.assert_not_awaited()
+            client.async_live_source.assert_not_awaited()
+            assert camera.webrtc_provider is None
+            assert camera.camera_capabilities.frontend_stream_types == {StreamType.HLS}
+            assert camera.supported_features & CameraEntityFeature.STREAM
     asyncio.run(run())
