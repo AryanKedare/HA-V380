@@ -148,7 +148,7 @@ def test_manifest_and_user_flow(tmp_path):
         async with _hass(tmp_path) as hass:
             integration = await loader.async_get_integration(hass, DOMAIN)
             assert integration.manifest["config_flow"] is True
-            assert integration.manifest["version"] == "0.1.3"
+            assert integration.manifest["version"] == "0.1.4"
             assert set(integration.dependencies) == {"http", "media_source", "stream"}
             flow = _flow(hass)
             result = await flow.async_step_user()
@@ -253,7 +253,9 @@ def test_camera_lifecycle_and_unknown_online_status(tmp_path):
             assert camera.supported_features & CameraEntityFeature.STREAM
             first = await camera.stream_source()
             client.async_live_source.return_value = "https://media.example.invalid/renewed.m3u8"
-            assert await camera.stream_source() != first
+            assert await camera.stream_source() == first
+            client.async_live_source.assert_awaited_once()
+            camera._source_refresh_at = 0
             client.async_live_source.side_effect = UnsupportedError
             with pytest.raises(HomeAssistantError) as unsupported:
                 await camera.stream_source()
@@ -333,14 +335,18 @@ def test_camera_renews_signed_source_and_cancels_on_unload(tmp_path):
             camera = V380CloudCamera(entry, device)
             camera.hass = hass
             stream = SimpleNamespace(update_source=Mock(), stop=AsyncMock(), available=True)
-            camera.stream = stream
             first_timer, renewed_timer = Mock(), Mock()
             client.async_live_source.side_effect = [
                 "https://ha.example.invalid/live?authSig=first",
                 "https://ha.example.invalid/live?authSig=renewed",
             ]
             with patch("custom_components.v380_cloud.camera.async_call_later", side_effect=[first_timer, renewed_timer]) as timer:
-                await camera.stream_source()
+                stream.source = await camera.stream_source()
+                camera.stream = stream
+                for _ in range(10):
+                    assert await camera.stream_source() == stream.source
+                assert timer.call_count == 1
+                first_timer.assert_not_called()
                 assert timer.call_args.args[1] == 8 * 60
                 callback = timer.call_args.args[2]
                 await callback(datetime.now(timezone.utc))
@@ -352,4 +358,28 @@ def test_camera_renews_signed_source_and_cancels_on_unload(tmp_path):
                 assert camera.stream is None
                 await callback(datetime.now(timezone.utc))
                 assert client.async_live_source.await_count == 2
+    asyncio.run(run())
+
+
+def test_camera_refreshes_existing_stream_before_reuse(tmp_path):
+    async def run():
+        async with _hass(tmp_path) as hass:
+            entry = _entry(hass)
+            client = _client()
+            coordinator = V380CloudCoordinator(hass, entry, client)
+            device = client.async_devices.return_value[0]
+            coordinator.async_set_updated_data({device.device_id: device})
+            entry.runtime_data = V380RuntimeData(client, coordinator, "fixture-account")
+            camera = V380CloudCamera(entry, device)
+            camera.hass = hass
+            with patch("custom_components.v380_cloud.camera.async_call_later"):
+                await camera.stream_source()
+                stream = SimpleNamespace(update_source=Mock(), stop=AsyncMock(), available=True)
+                camera.stream = stream
+                camera._source_refresh_at = 0
+                client.async_live_source.return_value = "https://ha.example.invalid/live?authSig=renewed"
+                assert await camera.async_create_stream() is stream
+                stream.update_source.assert_called_once_with(client.async_live_source.return_value)
+                assert client.async_live_source.await_count == 2
+                await camera.async_will_remove_from_hass()
     asyncio.run(run())

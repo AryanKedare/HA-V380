@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 import logging
+from typing import TYPE_CHECKING
 
 from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
@@ -17,6 +18,9 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import V380CloudCoordinator, V380ConfigEntry
 from .api import AuthError, CloudDevice, CloudError, UnsupportedError
 from .const import DOMAIN
+
+if TYPE_CHECKING:
+    from homeassistant.components.stream import Stream
 
 _LOGGER = logging.getLogger(__name__)
 # HA proxy source signatures last ten minutes. Renew before a worker reconnects
@@ -62,6 +66,8 @@ class V380CloudCamera(CoordinatorEntity[V380CloudCoordinator], Camera):
         self._entry = entry
         self._device_id = device.device_id
         self._source_lock = asyncio.Lock()
+        self._source: str | None = None
+        self._source_refresh_at = 0.0
         self._refresh_source_unsub: CALLBACK_TYPE | None = None
         self._removing = False
         self._attr_unique_id = f"{entry.runtime_data.account_id}_{device.device_id}"
@@ -83,8 +89,28 @@ class V380CloudCamera(CoordinatorEntity[V380CloudCoordinator], Camera):
         return True
 
     async def stream_source(self) -> str | None:
-        """Request a fresh cloud source when Home Assistant creates a stream."""
+        """Return the active source without postponing its renewal deadline."""
+        return await self._async_source()
+
+    async def async_create_stream(self) -> Stream | None:
+        """Refresh a cached HA stream before it is reused after an idle period."""
+        if self._removing:
+            return None
+        if self.stream is not None:
+            await self.stream_source()
+        return await super().async_create_stream()
+
+    async def _async_source(self, *, force: bool = False) -> str | None:
+        """Issue and apply a source under one lock, with one fixed deadline."""
         async with self._source_lock:
+            if self._removing:
+                return None
+            loop = asyncio.get_running_loop()
+            now = loop.time()
+            if not force and self._source is not None and now < self._source_refresh_at:
+                if self._refresh_source_unsub is None:
+                    self._schedule_source_refresh(self._source_refresh_at - now)
+                return self._source
             try:
                 source = await self._entry.runtime_data.client.async_live_source(
                     self._device_id
@@ -102,12 +128,18 @@ class V380CloudCamera(CoordinatorEntity[V380CloudCoordinator], Camera):
                 raise HomeAssistantError(
                     translation_domain=DOMAIN, translation_key="cloud_unavailable"
                 ) from err
+            if self._removing:
+                return None
+            self._source = source
+            self._source_refresh_at = loop.time() + _SOURCE_REFRESH_SECONDS
+            if self.stream is not None:
+                self.stream.update_source(source)
             self._schedule_source_refresh(_SOURCE_REFRESH_SECONDS)
             return source
 
     @callback
     def _schedule_source_refresh(self, delay: float) -> None:
-        """Keep one refresh timer, including when stills request the source."""
+        """Schedule renewal only when a source changes or a retry is needed."""
         if self._refresh_source_unsub is not None:
             self._refresh_source_unsub()
             self._refresh_source_unsub = None
@@ -122,18 +154,17 @@ class V380CloudCamera(CoordinatorEntity[V380CloudCoordinator], Camera):
         if self._removing or self.stream is None:
             return
         try:
-            source = await self.stream_source()
+            await self._async_source(force=True)
         except HomeAssistantError as err:
             if err.translation_key == "cloud_unavailable":
                 _LOGGER.debug("Unable to renew the V380 cloud camera source; retrying")
                 self._schedule_source_refresh(_SOURCE_RETRY_SECONDS)
             return
-        if not self._removing and self.stream is not None and source is not None:
-            self.stream.update_source(source)
 
     async def async_will_remove_from_hass(self) -> None:
         """Cancel source renewal and stop this entity's stream on unload."""
         self._removing = True
+        self._source = None
         if self._refresh_source_unsub is not None:
             self._refresh_source_unsub()
             self._refresh_source_unsub = None

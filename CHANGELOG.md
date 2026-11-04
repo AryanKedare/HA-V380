@@ -1,5 +1,23 @@
 # Changes
 
+## 0.1.4 — 4 November 2026
+
+- Fix signed Home Assistant live URL renewal: repeated source requests now
+  reuse the active URL without postponing its eight-minute renewal deadline.
+  Issuing and applying a replacement source happen together under one lock.
+- Refresh an existing HA stream before reuse when its renewal deadline passed
+  while idle. Cancel renewal and reject late results during entity unload.
+- Return retryable HTTP 503 for a known integration temporarily unloaded or
+  unavailable camera metadata after a failed poll. Preserve HTTP 404 for unknown
+  accounts and cameras, and keep all media routes authenticated.
+- Pin the installer to the 0.1.4 component. Add 14 offline source/route lifecycle
+  regressions; all pass. Eight isolated installer tests also pass.
+
+The user reports playback starts in HA on 0.1.3, then fails with local 404/401
+responses. URL lifecycle defects are covered offline; stable real HA playback
+after this fix still needs verification. The standalone protocol tester remains
+1.3.0 because the portable cloud transport is unchanged.
+
 ## 0.1.3 — 3 November 2026
 
 - Recover expired account tokens automatically using saved credentials, with

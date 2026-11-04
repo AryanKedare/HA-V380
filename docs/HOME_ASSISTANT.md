@@ -23,8 +23,17 @@ Each entity subclasses `Camera` and returns an authenticated HA proxy source
 from `stream_source`. The native HA stream integration handles playback and
 still images. Ten-minute proxy signatures are refreshed after eight minutes;
 the existing stream receives the renewed source through `Stream.update_source`.
+Source calls share the active URL and do not move its deadline. Reusing an
+existing HA stream checks freshness too, because Core only calls `stream_source`
+when it first creates a Stream. Source replacement and renewal scheduling happen
+under the same lock, with a removal guard after the awaited source request.
 Unloading an entity cancels renewal and stops its stream. Account unload and
 Home Assistant shutdown close the client's transport resources.
+
+The proxy resolves the current runtime on each request. A known entry temporarily
+without a runtime returns HTTP 503 and `Retry-After: 5`. Missing camera metadata
+after a failed poll is also retryable. Unknown entries/cameras remain HTTP 404;
+HA's signed-path authentication still runs before the view.
 
 ## Recording browser and media security
 
@@ -41,6 +50,14 @@ Cloud protocol or codec variants not implemented by the client produce an
 explicit error, without guessed sources or local-camera fallback.
 
 ## Verification
+
+For 0.1.4, 14 offline source/route lifecycle contracts pass with synthetic HA
+interfaces. Real HA fixture tests were extended for non-postponed renewal and
+cached Stream reuse. The available secondary HA 2026.2.3 environment cannot
+collect the camera tests because PyTurboJPEG is missing. The target HA 2026.10.2
+environment is unavailable, so this is not a clean target-version suite pass.
+The secondary proxy run has four passing download tests and five fixture failures
+because that older HA lacks the target's device-registry setup API.
 
 For 0.1.3, synthetic recovery fixtures exercise the account and portable live
 API: expired-token relogin, concurrent request sharing, one device-credential

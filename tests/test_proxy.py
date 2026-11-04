@@ -87,7 +87,7 @@ def test_hls_uses_scoped_signed_ha_paths_without_vendor_tokens(tmp_path):
         async with _hass_and_app(tmp_path) as (hass, app):
             client = _cloud_client()
             hass.data[DOMAIN] = {
-                "entryfixture": SimpleNamespace(client=client, coordinator=SimpleNamespace(data={"1234": object()}))
+                "entryfixture": SimpleNamespace(client=client, coordinator=SimpleNamespace(data={"1234": object()}, last_update_success=True))
             }
             url = signed_media_url(hass, "entryfixture", "recording", "1234", "clipfixture")
             assert url.startswith("https://ha.example.invalid/api/v380_cloud/recording/")
@@ -149,7 +149,7 @@ def test_signed_media_rejects_camera_outside_account(tmp_path):
         async with _hass_and_app(tmp_path) as (hass, app):
             client = _cloud_client()
             hass.data[DOMAIN] = {
-                "entryfixture": SimpleNamespace(client=client, coordinator=SimpleNamespace(data={"1234": object()}))
+                "entryfixture": SimpleNamespace(client=client, coordinator=SimpleNamespace(data={"1234": object()}, last_update_success=True))
             }
             url = signed_media_url(hass, "entryfixture", "recording", "5678", "clipfixture")
             view = V380RecordingView()
