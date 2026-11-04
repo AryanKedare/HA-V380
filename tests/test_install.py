@@ -26,7 +26,7 @@ class InstallerTests(unittest.TestCase):
         self.source = self.root / 'source checkout'
         self.component = self.source / 'custom_components/v380_cloud'
         self.component.mkdir(parents=True)
-        (self.component / 'manifest.json').write_text(json.dumps({'domain': 'v380_cloud', 'version': '0.1.5'}, indent=2))
+        (self.component / 'manifest.json').write_text(json.dumps({'domain': 'v380_cloud', 'version': '0.1.6'}, indent=2))
         for name in ('__init__.py', 'api.py', 'live.py'):
             (self.component / name).write_text('# new component\n')
         (self.component / 'translations').mkdir()
@@ -55,7 +55,7 @@ class InstallerTests(unittest.TestCase):
         (self.target / '.hidden').write_text('preserve in backup\n')
 
     def assert_new_install(self):
-        self.assertEqual(json.loads((self.target / 'manifest.json').read_text())['version'], '0.1.5')
+        self.assertEqual(json.loads((self.target / 'manifest.json').read_text())['version'], '0.1.6')
         self.assertTrue((self.target / 'translations/en.json').is_file())
         self.assertFalse((self.target / '__pycache__').exists())
         self.assertFalse((self.target.parent / '.v380-cloud-install.lock').exists())
@@ -91,7 +91,7 @@ with open(os.environ['V380_TEST_URL_LOG'], 'w') as output:
     def test_fresh_offline_install_accepts_paths_with_spaces_and_removes_bytecode(self):
         result = self.run_installer('--source', self.source, '--config-dir', self.config)
         self.assert_new_install()
-        self.assertIn('Installed V380 Cloud 0.1.5', result.stdout)
+        self.assertIn('Installed V380 Cloud 0.1.6', result.stdout)
         self.assertFalse((self.config / '.v380-cloud-backups').exists())
 
     def test_upgrade_preserves_complete_backup_and_other_integrations(self):
@@ -155,9 +155,9 @@ exec ''' + repr(real_mv) + ''' "$@"
 
     def test_wget_fallback_accepts_branch_ref(self):
         env = self.download_environment('wget')
-        self.run_installer('--ref', 'release/test-0.1.5', env=env)
+        self.run_installer('--ref', 'release/test-0.1.6', env=env)
         self.assert_new_install()
-        self.assertTrue((self.root / 'download-url.txt').read_text().endswith('/zipball/release%2Ftest-0.1.5'))
+        self.assertTrue((self.root / 'download-url.txt').read_text().endswith('/zipball/release%2Ftest-0.1.6'))
 
     def test_failed_download_leaves_existing_component_untouched(self):
         self.old_install()

@@ -40,8 +40,10 @@ def _client(hass: HomeAssistant, entry_id: str, device_id: str):
                 headers={"Retry-After": "5"},
             )
         raise web.HTTPNotFound()
-    if device_id not in (runtime.coordinator.data or {}):
-        if not runtime.coordinator.last_update_success:
+    # The client snapshot may be newer than the coordinator after a source or
+    # device-credential refresh. Use the same catalog as async_live_source.
+    if device_id not in runtime.client.devices:
+        if not runtime.coordinator.last_update_success or not runtime.client.device_list_complete:
             raise web.HTTPServiceUnavailable(
                 text="V380 camera metadata is temporarily unavailable; retry playback",
                 headers={"Retry-After": "5"},

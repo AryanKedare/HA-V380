@@ -81,6 +81,7 @@ stubs = {
 with patch.dict(sys.modules, stubs):
     camera = importlib.import_module(PACKAGE + '.camera')
     proxy = importlib.import_module(PACKAGE + '.proxy')
+    diagnostics = importlib.import_module(PACKAGE + '.diagnostics')
 
 
 def make_stream(source):
@@ -255,6 +256,19 @@ class SourceLifecycleTests(unittest.IsolatedAsyncioTestCase):
             await client.async_live_source('7')
         await client.async_close()
 
+    async def test_catalog_diagnostics_expose_counts_without_camera_or_account_data(self):
+        import json
+        client = api.V380CloudClient(None, 'private-account-fixture', 'private-password-fixture')
+        client.access_token = 'private-token-fixture'
+        client.devices['private-camera-fixture'] = api.CloudDevice('private-camera-fixture', 'private-name-fixture')
+        coordinator = types.SimpleNamespace(data=client.devices, last_update_success=True)
+        entry = types.SimpleNamespace(runtime_data=types.SimpleNamespace(client=client, coordinator=coordinator))
+        result = await diagnostics.async_get_config_entry_diagnostics(object(), entry)
+        self.assertFalse(result['device_catalog']['device_list_complete'])
+        self.assertEqual(result['device_catalog']['empty_catalog_recoveries'], 0)
+        self.assertNotIn('private-', json.dumps(result))
+        await client.async_close()
+
 
 class RouteLifecycleTests(unittest.TestCase):
     def hass(self, *, entry=None, runtime=None):
@@ -275,18 +289,20 @@ class RouteLifecycleTests(unittest.TestCase):
                 proxy._client(self.hass(entry=entry), 'entry', '7')
 
     def test_failed_empty_snapshot_is_retryable_but_unknown_camera_is_not(self):
-        runtime = types.SimpleNamespace(client=object(), coordinator=types.SimpleNamespace(
+        runtime = types.SimpleNamespace(client=types.SimpleNamespace(devices={}, device_list_complete=False), coordinator=types.SimpleNamespace(
             data=None, last_update_success=False))
         hass = self.hass(runtime=runtime)
         with self.assertRaises(web.HTTPServiceUnavailable):
             proxy._client(hass, 'entry', '7')
         runtime.coordinator.data = {'8': object()}
         runtime.coordinator.last_update_success = True
+        runtime.client.devices = {'8': object()}
+        runtime.client.device_list_complete = True
         with self.assertRaises(web.HTTPNotFound):
             proxy._client(hass, 'entry', '7')
 
     def test_valid_camera_survives_a_failed_poll_with_cached_metadata(self):
-        runtime = types.SimpleNamespace(client=object(), coordinator=types.SimpleNamespace(
+        runtime = types.SimpleNamespace(client=types.SimpleNamespace(devices={'7': object()}, device_list_complete=True), coordinator=types.SimpleNamespace(
             data={'7': object()}, last_update_success=False))
         self.assertIs(proxy._client(self.hass(runtime=runtime), 'entry', '7'), runtime.client)
 
@@ -294,7 +310,24 @@ class RouteLifecycleTests(unittest.TestCase):
         hass = self.hass(entry=types.SimpleNamespace(domain='v380_cloud'))
         with self.assertRaises(web.HTTPServiceUnavailable):
             proxy._client(hass, 'entry', '7')
-        runtime = types.SimpleNamespace(client=object(), coordinator=types.SimpleNamespace(
+        runtime = types.SimpleNamespace(client=types.SimpleNamespace(devices={'7': object()}, device_list_complete=True), coordinator=types.SimpleNamespace(
             data={'7': object()}, last_update_success=True))
         hass.data['v380_cloud']['entry'] = runtime
         self.assertIs(proxy._client(hass, 'entry', '7'), runtime.client)
+
+    def test_route_uses_newer_client_catalog_before_coordinator_catches_up(self):
+        runtime = types.SimpleNamespace(client=types.SimpleNamespace(devices={'7': object()}, device_list_complete=True),
+            coordinator=types.SimpleNamespace(data={}, last_update_success=True))
+        self.assertIs(proxy._client(self.hass(runtime=runtime), 'entry', '7'), runtime.client)
+
+    def test_stale_coordinator_cannot_authorize_a_removed_camera(self):
+        runtime = types.SimpleNamespace(client=types.SimpleNamespace(devices={}, device_list_complete=True),
+            coordinator=types.SimpleNamespace(data={'7': object()}, last_update_success=True))
+        with self.assertRaises(web.HTTPNotFound):
+            proxy._client(self.hass(runtime=runtime), 'entry', '7')
+
+    def test_incomplete_catalog_is_retryable_for_an_unknown_camera(self):
+        runtime = types.SimpleNamespace(client=types.SimpleNamespace(devices={}, device_list_complete=False),
+            coordinator=types.SimpleNamespace(data={}, last_update_success=True))
+        with self.assertRaises(web.HTTPServiceUnavailable):
+            proxy._client(self.hass(runtime=runtime), 'entry', '7')

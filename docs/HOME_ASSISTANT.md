@@ -19,6 +19,13 @@ not establish online status from the device list, so an unknown status is kept
 distinct from an explicit offline status. Newly discovered cameras are added
 and removed cameras become unavailable.
 
+Catalog refreshes commit atomically. Missing sections and recognized partial
+responses retain known cameras, while valid owned/shared sections can update
+their respective entries. An apparent removal needs two observations. A
+suddenly empty catalog performs one saved-credential login before confirmation,
+mirroring the session reset provided by an entry reload. Auth/network failures
+leave the committed list intact, and unload cannot restore a late response.
+
 Each entity subclasses `Camera` and returns an authenticated HA proxy source
 from `stream_source`. The native HA stream integration handles playback and
 still images through HLS. The camera overrides Core's supported-provider hook
@@ -37,9 +44,11 @@ under the same lock, with a removal guard after the awaited source request.
 Unloading an entity cancels renewal and stops its stream. Account unload and
 Home Assistant shutdown close the client's transport resources.
 
-The proxy resolves the current runtime on each request. A known entry temporarily
+The proxy resolves the current runtime and client catalog on each request. A known entry temporarily
 without a runtime returns HTTP 503 and `Retry-After: 5`. Missing camera metadata
-after a failed poll is also retryable. Unknown entries/cameras remain HTTP 404;
+after a failed/incomplete poll is also retryable. Known cameras use the same
+client snapshot as source resolution even if the coordinator has older data.
+Unknown entries/cameras after a complete snapshot remain HTTP 404;
 HA's signed-path authentication still runs before the view.
 
 ## Recording browser and media security
@@ -57,6 +66,13 @@ Cloud protocol or codec variants not implemented by the client produce an
 explicit error, without guessed sources or local-camera fallback.
 
 ## Verification
+
+For 0.1.6, 94 offline checks pass, including 20 new catalog refresh regressions
+and 24 source/route lifecycle checks. The 0.1.5 partial-reply cache erasure is
+reproduced against its source. Confirmed removals, failed confirmation, concurrent
+refreshes, token expiry and unload are covered. The standalone tester is rebuilt
+from matching protocol sources and its 15-frame video self-test passes. The
+installed HA/browser run remains outside these checks.
 
 For 0.1.5, 20 source/route contracts, 20 auth/relay recovery checks and eight
 installer checks pass. A separate harness executes the exact Core 2026.10.4

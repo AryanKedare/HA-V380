@@ -1,5 +1,26 @@
 # Changes
 
+## 0.1.6 — 5 November 2026
+
+- Preserve known cameras when a device-list response is partial, a catalog
+  section is missing/null, or a shared row cannot be decoded. Authoritative
+  owned/shared sections are handled independently; omissions are not empty lists.
+- Confirm an apparent removal with one additional catalog request. If all known
+  cameras disappear, refresh the saved cloud session once before confirmation.
+  A confirmed removal is honored; failures cannot erase the last committed list.
+- Serialize catalog commits and let concurrent refresh callers share the result.
+  Use the client's current snapshot for media-route ownership checks, avoiding
+  a 404 from an older coordinator snapshot. Incomplete unknown lookups are 503.
+- Add aggregate catalog completeness, result and recovery counters to integration
+  diagnostics. Tester 1.4.0 embeds the new account code and reports these fields.
+- Pin the installer to 0.1.6. Offline checks: 20 catalog, 24 source/route,
+  20 auth/relay recovery, six forwarding, four shared parsing, 12 standalone
+  report and eight installer checks pass. The 15-frame self-test also passes.
+
+The user reports a missing-camera error and playback restored by reloading the
+integration. Partial-reply cache erasure is reproduced in fixtures; the actual
+failing vendor response was not captured. Real HA longevity remains unverified.
+
 ## 0.1.5 — 4 November 2026
 
 - Keep V380 cameras on Home Assistant's HLS stream pipeline by declining

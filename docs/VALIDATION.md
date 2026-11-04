@@ -1,6 +1,35 @@
-# Validation status — 4 November 2026
+# Validation status — 5 November 2026
 
-## Current 0.1.5 results
+## Current 0.1.6 results
+
+The user reports local 404 followed by the new missing-camera message, and says
+reloading the integration restores playback. The actual failing vendor response
+has not been captured. Inspection found that missing/null sections and recognized
+partial results could replace the entire device map with an empty/subset map.
+An isolated replay against 0.1.5 reproduces that cache loss; the patched source
+retains the previously known camera for the same partial response.
+
+Version 0.1.6 preserves known entries for non-authoritative sections and confirms
+removals with one additional request. A suddenly empty catalog performs one
+saved-credential login before confirmation. Confirmed removals still take effect;
+failed login/request/parse cannot erase the committed map. Concurrent refreshes
+share a result, and routes use that client map rather than stale coordinator data.
+
+Checks completed successfully: 20 catalog regressions, 24 source/route lifecycle,
+20 auth/relay recovery, six forwarding, four shared parsing, 12 standalone report
+and eight installer checks: 94 total. Catalog coverage includes partial result
+codes, missing sections, corrupt shares, true removal, transient omissions, empty
+catalog login recovery, failed confirmation, token expiry, concurrency and unload.
+Route tests cover snapshot ordering, removed-camera rejection and retryable
+incomplete lookup. Diagnostics/report privacy is checked with synthetic secrets.
+
+Tester 1.4.0 embeds the matching account implementation and reports aggregate
+catalog status/counters. Its self-test decodes 15 synthetic frames. Python/JSON,
+translation parity, embedded hashes and ZIP/source equality are checked. No vendor
+requests or installed HA changes were made. Target HA/browser longevity and the
+previously documented full adapter-suite shutdown failure remain unverified.
+
+## Previous 0.1.5 results
 
 The user confirms playback initially worked after 0.1.4, then stopped with
 `Failed to start WebRTC stream` and the generic `cloud_unavailable` translation.

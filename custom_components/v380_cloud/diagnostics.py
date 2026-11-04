@@ -10,6 +10,14 @@ async def async_get_config_entry_diagnostics(
 ) -> dict[str, object]:
     """Exclude credentials, vendor IDs, raw responses, and playback URLs."""
     coordinator = entry.runtime_data.coordinator
+    client = entry.runtime_data.client
+    catalog = {
+        "device_list_complete": getattr(client, "device_list_complete", False) is True,
+        "last_device_list_result": getattr(client, "last_device_list_result", None),
+        "partial_device_list_responses": getattr(client, "partial_device_list_responses", 0),
+        "device_removal_checks": getattr(client, "device_removal_checks", 0),
+        "empty_catalog_recoveries": getattr(client, "empty_catalog_recoveries", 0),
+    }
     return {
         "experimental": True,
         "camera_count": len(coordinator.data),
@@ -17,5 +25,6 @@ async def async_get_config_entry_diagnostics(
         "offline_camera_count": sum(device.online is False for device in coordinator.data.values()),
         "unknown_status_camera_count": sum(device.online is None for device in coordinator.data.values()),
         "last_update_success": coordinator.last_update_success,
+        "device_catalog": catalog,
     }
 

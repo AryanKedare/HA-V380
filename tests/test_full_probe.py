@@ -54,6 +54,14 @@ class FakeSession:
         return response()
 
 
+class CatalogStatusFixture:
+    device_list_complete = True
+    last_device_list_result = 0
+    partial_device_list_responses = 0
+    device_removal_checks = 0
+    empty_catalog_recoveries = 0
+
+
 def test_actual_decode_and_invalid_media_rejection():
     result = probe.decode_video(sample_ts(), format='mpegts')
     assert result['decoded_frames'] == 12 and result['codec'] == 'h264'
@@ -116,7 +124,7 @@ def test_ha_low_latency_parts_can_be_decoded():
 def test_cloud_report_does_not_leak_account_camera_or_tokens(tmp_path):
     async def run():
         p = probe.load_protocol(); closed = []
-        class Account:
+        class Account(CatalogStatusFixture):
             def __init__(self, *args): pass
             async def async_login(self): return 'private-account-id'
             async def async_devices(self):
@@ -221,7 +229,7 @@ def test_detailed_errors_are_bounded_sanitized_and_survive_wrapping(capsys):
 def test_cloud_live_only_does_not_query_recordings_or_include_them_in_pass(tmp_path):
     async def run():
         p=probe.load_protocol()
-        class Account:
+        class Account(CatalogStatusFixture):
             def __init__(self,*args): pass
             async def async_login(self): return 'private-account'
             async def async_devices(self): return [p.account.CloudDevice('42','private-camera',metadata={'type':0})]
@@ -236,7 +244,7 @@ def test_cloud_live_only_does_not_query_recordings_or_include_them_in_pass(tmp_p
             assert await probe.run(args)==0
             recordings.assert_not_called()
         report=json.loads(args.report.read_text())
-        assert report['script_version']=='1.3.0'
+        assert report['script_version']=='1.4.0'
         assert report['live_transport']=='forwarded'
         assert report['scope']['cloud_recordings']=='not_requested'
         assert report['cameras'][0]['recordings']=={'status':'not_requested'}
