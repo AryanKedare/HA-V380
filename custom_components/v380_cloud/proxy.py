@@ -32,7 +32,20 @@ def signed_media_url(
 
 def _client(hass: HomeAssistant, entry_id: str, device_id: str):
     runtime = hass.data.get(DOMAIN, {}).get(entry_id)
-    if runtime is None or device_id not in runtime.coordinator.data:
+    if runtime is None:
+        entry = hass.config_entries.async_get_entry(entry_id)
+        if entry is not None and entry.domain == DOMAIN:
+            raise web.HTTPServiceUnavailable(
+                text="V380 integration is temporarily unavailable; retry playback",
+                headers={"Retry-After": "5"},
+            )
+        raise web.HTTPNotFound()
+    if device_id not in (runtime.coordinator.data or {}):
+        if not runtime.coordinator.last_update_success:
+            raise web.HTTPServiceUnavailable(
+                text="V380 camera metadata is temporarily unavailable; retry playback",
+                headers={"Retry-After": "5"},
+            )
         raise web.HTTPNotFound()
     return runtime.client
 

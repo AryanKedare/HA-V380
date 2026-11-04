@@ -1,6 +1,38 @@
-# Validation status — 3 November 2026
+# Validation status — 4 November 2026
 
-## Current 0.1.3 results
+## Current 0.1.4 results
+
+The user confirms HA 0.1.3 playback starts, then fails with local HTTP 404/401.
+Both log lines use the same HA live path and a signature with a ten-minute
+lifetime. Those errors do not establish a new V380 account or relay rejection.
+
+Inspection found two URL lifecycle defects: repeated calls to `stream_source`
+could reset the timer without replacing an existing Stream's source, and HA's
+cached Stream bypasses `stream_source` on reuse. Version 0.1.4 keeps a fixed
+renewal deadline for the active URL, applies replacements under the source lock,
+and checks freshness on cached-stream reuse. Known entries missing a runtime
+during reload now return retryable HTTP 503. Unknown entry/camera lookup remains
+404, so a persistent missing-camera error still needs runtime evidence.
+
+Fourteen offline source/route lifecycle tests pass with synthetic HA interfaces.
+Coverage includes repeated source requests, timer renewal, idle reuse, concurrent
+access, failed renewal, unload races, real account-error propagation, retryable
+reload/metadata failures, and unknown-camera/entry rejection. Eight installer
+tests pass using local ZIP fixtures and mock downloaders. No vendor requests or
+changes to an installed HA were made.
+
+Real HA fixture tests were extended for the two URL regressions. A camera test
+attempt in an available secondary HA 2026.2.3 environment stopped during collection
+because PyTurboJPEG is missing; no camera assertions ran. The target HA 2026.10.2
+environment is unavailable. A secondary proxy run on 2026.2.3 completed with four
+download tests passing and five fixture-setup failures: that older release lacks
+`device_registry.async_setup`, used by the target-version fixtures. These are not
+a clean HA-suite result. The historical shutdown failure below is unresolved.
+Real HA playback beyond the ten-minute signature lifetime and after idle/reload
+still needs validation. The portable protocol is unchanged, and its 1.3.0 tester
+and previous checks were not rerun for this adapter-only change.
+
+## Previous 0.1.3 results
 
 The user reports repeated timeouts in Home Assistant live playback. Version
 0.1.3 adds saved-credential recovery for expired account tokens and rejected

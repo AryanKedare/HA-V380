@@ -1,4 +1,4 @@
-# V380 Cloud for Home Assistant — experimental 0.1.3
+# V380 Cloud for Home Assistant — experimental 0.1.4
 
 A custom Home Assistant integration built from static analysis of the supplied
 V380 Pro **2.2.90** APKs. It signs in to the V380 cloud account, creates camera
@@ -27,7 +27,7 @@ Download [install.sh](install.sh) and run it in your Home Assistant terminal:
 sh install.sh --config-dir /config
 ```
 
-The installer downloads the pinned 0.1.3 commit by default. It needs `curl`
+The installer downloads the pinned 0.1.4 commit by default. It needs `curl`
 or `wget` and `unzip`. Change `--config-dir` for a different configuration path;
 the directory must already contain `configuration.yaml`. Existing component
 files are backed up under `.v380-cloud-backups` in that config directory.
@@ -115,6 +115,14 @@ cloud camera credentials once; it does not immediately prompt for your cloud
 account password. Long outages, codec changes and unsupported firmware still
 stop playback. Real Home Assistant recovery needs testing on your installation.
 
+Version 0.1.4 also fixes local Home Assistant playback URL renewal. Signed URLs
+last ten minutes; the active stream receives a new URL after eight minutes.
+Repeated source requests reuse that URL without postponing its renewal timer,
+and an idle cached stream is refreshed before reuse. This prevents those paths
+from retrying an expired signature. A configured account temporarily unavailable
+during reload returns HTTP 503 with `Retry-After`, rather than a permanent 404.
+Unknown accounts and cameras still return 404. No authentication checks are bypassed.
+
 ## Browse saved cloud footage
 
 Open **Media → V380 Cloud recordings → account → camera → date → recording**.
@@ -145,7 +153,8 @@ not change the camera's settings.
 | Login rejected | Check the regular cloud account/password and phone account format. Social login is not implemented. |
 | Camera appears but live transport is unsupported | The account may contain a newer key-exchange camera. Its live protocol needs further work; check recordings separately. |
 | Live fails to start | Regional routing, firmware framing or device authentication may differ. Capture the error and camera software/firmware version for diagnosis. |
-| Live repeatedly times out | Install 0.1.3 and restart Home Assistant. Automatic token recovery and relay reconnects are enabled. If playback still stops, capture the exact Home Assistant error line. |
+| Live repeatedly times out | Install 0.1.4 and restart Home Assistant. Automatic token recovery, relay reconnects and playback URL renewal are enabled. If playback still stops, capture the exact Home Assistant error line with the URL query removed. |
+| HA live URL returns 401 / 404 | A local playback authorization or route lookup failed. Version 0.1.4 fixes renewal and cached-stream reuse, and makes temporary reload failures retryable. A persistent 404 still needs account/camera availability checks. |
 | Recording requires legacy HTTP | Use the explicit Reconfigure preference described above. |
 | No dates | Confirm this account can view saved cloud recordings in V380 Pro. |
 | Recording opens but browser cannot decode it | Try a browser/device supporting its codec. Recordings are not transcoded. |
@@ -193,12 +202,12 @@ shutdown/garbage collection. The crash reproduces with Python 3.14.0, 3.14.2 and
 3.14.8 on this macOS host; its cause is unresolved. It must not be presented as
 a clean full-suite pass or attributed to an outdated Python runtime.
 
-The current forwarding/API/video and recovery checks complete with 41 tests
-passed and one loopback test skipped by sandbox restrictions. Eight installer
-tests also pass. Recovery fixtures exercise token expiry, concurrent login,
-device-credential refresh, video stalls, bounded retries and keyframe resumption.
-The standalone self-test also passes. The Home Assistant adapter suite was not
-rerun in this environment.
+Version 0.1.4 adds 14 passing offline source/route lifecycle tests with synthetic
+HA interfaces. Eight installer tests also pass. They cover renewal deadlines,
+idle-stream reuse, concurrent access, unload, retryable route lookup and rejection
+of unknown entries/cameras. See the validation notes for the separate HA test
+limitations. Previous 0.1.3 forwarding/API/video/recovery checks passed 41 tests
+with one loopback skip; those unchanged protocol groups were not rerun for 0.1.4.
 
 The user-run report establishes direct cloud playback on the camera listed
 above. Home Assistant/browser playback, reconnect behavior, long-running source
