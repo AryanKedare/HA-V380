@@ -3,7 +3,7 @@
 set -eu
 
 REPOSITORY="AryanKedare/HA-V380"
-DEFAULT_REF="a391965a0a08a40455be22b3e7241fbdcf073ab8"
+DEFAULT_REF="6164952dbcba8437694b623f51bed607c03c6b3d"
 config_dir="${HA_CONFIG_DIR:-/config}"
 release_ref="$DEFAULT_REF"
 ref_supplied=0
