@@ -1,5 +1,25 @@
 # Changes
 
+## 0.1.7 — 5 November 2026
+
+- Renew the public reconnect source without forcing active video to exit. A
+  0.1.6 replay on Core 2026.11.0 reproduces the missing-HLS ValueError when
+  renewal interrupts worker backoff and queued cleanup removes the output.
+- Retire idle/lost-output objects before new HLS viewers attach. Join preloaded
+  workers on retirement/unload without changing shared camera preferences.
+- Keep cached cameras available through transient metadata errors while honoring
+  auth rejection, removal, explicit offline state and failed video.
+- Bound startup to 25 seconds within Core's 30-second reader budget; cancel
+  abandoned viewers before another upstream session can overlap. Normal viewer
+  closes are not recorded as relay failures. Report sanitized failure details.
+- Target Core 2026.11.0 and Python 3.14.2+; the current 3.14.10 run completes
+  cleanly with 163 tests and 14 subtests passing. Seven real-HA pipeline tests
+  exercise local HTTP, Core's worker, HLS and independent fragment decoding.
+
+Camera/network/browser longevity remains to be verified. The portable cloud
+transport and standalone tester 1.4.0 are unchanged. The historical 2026.10.2
+shutdown issue did not occur in this current run; its original cause is unknown.
+
 ## 0.1.6 — 5 November 2026
 
 - Preserve known cameras when a device-list response is partial, a catalog

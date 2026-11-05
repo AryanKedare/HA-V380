@@ -26,5 +26,7 @@ async def async_get_config_entry_diagnostics(
         "unknown_status_camera_count": sum(device.online is None for device in coordinator.data.values()),
         "last_update_success": coordinator.last_update_success,
         "device_catalog": catalog,
+        "live_stream_failures": getattr(client, "live_stream_failures", 0),
+        "last_live_failure": dict(getattr(client, "last_live_failure", {})),
     }
 

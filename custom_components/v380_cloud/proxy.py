@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 from datetime import timedelta
+import logging
 import time
 import re
 from urllib.parse import quote
@@ -19,6 +20,34 @@ from homeassistant.helpers.http import KEY_HASS
 from .const import DOMAIN
 from .errors import AuthError, CloudError, UnsupportedError
 from .mpegts import MpegTsMuxer
+
+_LOGGER = logging.getLogger(__name__)
+LIVE_STARTUP_TIMEOUT = 25.0  # HA's PyAV source-open budget is 30 seconds.
+DISCONNECT_CHECK_INTERVAL = 0.25
+
+
+async def _wait_for_disconnect(request: web.Request) -> None:
+    while request.transport is not None and not request.transport.is_closing():
+        await asyncio.sleep(DISCONNECT_CHECK_INTERVAL)
+
+
+async def _write_live(request, frames, response) -> None:
+    # Respond with a real error before HA's source-open timeout. A stopped
+    # downstream reader must not leave an overlapping vendor session behind.
+    async with asyncio.timeout(LIVE_STARTUP_TIMEOUT):
+        while True:
+            first = await anext(frames)
+            if first.codec in ("h264", "hevc", "h265"):
+                break
+    mux = MpegTsMuxer(first.codec)
+    await response.prepare(request)
+    await response.write(mux.push(first.payload, time.monotonic(), keyframe=first.keyframe))
+    async for frame in frames:
+        if frame.codec not in ("h264", "hevc", "h265"):
+            continue
+        if frame.codec != first.codec:
+            raise UnsupportedError("The cloud camera changed video codec")
+        await response.write(mux.push(frame.payload, time.monotonic(), keyframe=frame.keyframe))
 
 
 def signed_media_url(
@@ -63,39 +92,39 @@ class V380LiveView(HomeAssistantView):
         client.register_media_task()
         frames = client.async_live_frames(device_id)
         response = web.StreamResponse(headers={"Content-Type": "video/mp2t", "Cache-Control": "no-store"})
+        producer = asyncio.create_task(_write_live(request, frames, response))
+        disconnected = asyncio.create_task(_wait_for_disconnect(request))
+
+        def record(error: CloudError) -> None:
+            diagnostic = client.record_live_failure(error, phase="stream" if response.prepared else "startup")
+            _LOGGER.warning("V380 live stream failed: %s", diagnostic)
+
         try:
-            # Wait for a video frame before committing HTTP200. Some cameras
-            # send telemetry or audio first. A failed relay must be a real error.
-            async with asyncio.timeout(60):
-                while True:
-                    first = await anext(frames)
-                    if first.codec in ("h264", "hevc", "h265"):
-                        break
-            mux = MpegTsMuxer(first.codec)
-            await response.prepare(request)
-            # The raw SDK clock unit differs by firmware; arrival time keeps a
-            # valid monotonic timeline without inventing a unit for that field.
-            await response.write(mux.push(first.payload, time.monotonic(), keyframe=first.keyframe))
-            async for frame in frames:
-                if frame.codec not in ("h264", "hevc", "h265"):
-                    continue
-                if frame.codec != first.codec:
-                    raise UnsupportedError("The cloud camera changed video codec")
-                await response.write(mux.push(frame.payload, time.monotonic(), keyframe=frame.keyframe))
-        except AuthError:
+            done, _ = await asyncio.wait((producer, disconnected), return_when=asyncio.FIRST_COMPLETED)
+            if producer in done:
+                await producer
+        except AuthError as err:
+            record(err)
             if entry := hass.config_entries.async_get_entry(entry_id):
                 entry.async_start_reauth(hass)
             if not response.prepared:
                 raise web.HTTPBadGateway(text="V380 camera authentication failed") from None
-        except UnsupportedError:
+        except UnsupportedError as err:
+            record(err)
             if not response.prepared:
                 raise web.HTTPNotImplemented(text="This V380 cloud video protocol is not supported") from None
-        except (CloudError, ClientError, TimeoutError, StopAsyncIteration, ValueError):
+        except ConnectionError:
+            pass  # HA/browser stopped watching; this is not a relay failure.
+        except (CloudError, ClientError, TimeoutError, StopAsyncIteration, ValueError) as err:
+            detail = err if isinstance(err, CloudError) else CloudError(
+                stage="media_stream", reason="network_timeout" if isinstance(err, TimeoutError) else "session_failed")
+            record(detail)
             if not response.prepared:
                 raise web.HTTPBadGateway(text="V380 cloud video could not start") from None
-        except ConnectionError:
-            pass  # HA/browser stopped watching.
         finally:
+            for task in (producer, disconnected):
+                task.cancel()
+            await asyncio.gather(producer, disconnected, return_exceptions=True)
             await frames.aclose()
             client.unregister_media_task()
         return response

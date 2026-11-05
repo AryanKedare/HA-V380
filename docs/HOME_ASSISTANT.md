@@ -1,9 +1,9 @@
 # Home Assistant boundary
 
-The integration targets **Home Assistant Core 2026.10.2**. The Home Assistant
-adapter has been exercised with fixture clients. Direct cloud decoding is now
-user-confirmed on one AWT3710D camera, while end-to-end Home Assistant/browser
-playback and recording playback remain unverified.
+The integration targets **Home Assistant Core 2026.11.0**. Current tests use
+actual HA authentication, HTTP and the stream worker to generate HLS from
+synthetic camera video. Direct cloud decoding is user-confirmed on one AWT3710D.
+Real camera/network/browser longevity and recordings still need verification.
 
 ## Account and entities
 
@@ -26,6 +26,10 @@ suddenly empty catalog performs one saved-credential login before confirmation,
 mirroring the session reset provided by an entry reload. Auth/network failures
 leave the committed list intact, and unload cannot restore a late response.
 
+Camera availability uses the client catalog and video-worker state. Transient
+metadata errors retain access to known cameras. Closed clients, rejected auth,
+confirmed removal, explicit offline state and failed video remain unavailable.
+
 Each entity subclasses `Camera` and returns an authenticated HA proxy source
 from `stream_source`. The native HA stream integration handles playback and
 still images through HLS. The camera overrides Core's supported-provider hook
@@ -35,13 +39,18 @@ implemented. This does not suppress cloud or source-preparation failures.
 Missing camera metadata, an unbound playback proxy and unreadable camera
 credentials have separate error messages.
 
-Ten-minute proxy signatures are refreshed after eight minutes;
-the existing stream receives the renewed source through `Stream.update_source`.
+Ten-minute proxy signatures are refreshed after eight minutes. Renewal updates
+the public Stream `source` for its next connection, preserving the current HTTP
+response. It does not call the restart-inducing `update_source`; Core reads the
+fresh URL on a genuine retry.
 Source calls share the active URL and do not move its deadline. Reusing an
 existing HA stream checks freshness too, because Core only calls `stream_source`
 when it first creates a Stream. Source replacement and renewal scheduling happen
 under the same lock, with a removal guard after the awaited source request.
-Unloading an entity cancels renewal and stops its stream. Account unload and
+Idle/lost-output streams are retired before new viewers can attach, so old
+worker cleanup cannot remove the new object's HLS output. Retirement copies
+preload settings before stopping, preserving camera preferences. Unloading an
+entity cancels renewal and joins active/retiring workers. Account unload and
 Home Assistant shutdown close the client's transport resources.
 
 The proxy resolves the current runtime and client catalog on each request. A known entry temporarily
@@ -50,6 +59,12 @@ after a failed/incomplete poll is also retryable. Known cameras use the same
 client snapshot as source resolution even if the coordinator has older data.
 Unknown entries/cameras after a complete snapshot remain HTTP 404;
 HA's signed-path authentication still runs before the view.
+
+The first-video budget is 25 seconds, below Core's 30-second source-open/read
+budget. A disconnect watcher cancels the producer even before headers exist;
+both tasks finish before the iterator closes. This prevents abandoned readers
+from leaving overlapping sessions. Failures record only revalidated enums and
+numbers with startup/stream phase; normal viewer closure is not a relay failure.
 
 ## Recording browser and media security
 
@@ -66,6 +81,15 @@ Cloud protocol or codec variants not implemented by the client produce an
 explicit error, without guessed sources or local-camera fallback.
 
 ## Verification
+
+For 0.1.7 the full Core 2026.11.0 / Python 3.14.10 run completes with **163 tests
+and 14 subtests passed**, exit 0. Seven real-HA pipeline tests cover local HTTP,
+Core demux/HLS, fMP4 decoding, uninterrupted renewal, retry, idle replacement,
+slow startup, disconnect cleanup and failure privacy. The old camera reproduces
+`Stream is not configured for format 'hls'` during worker backoff. The historical
+2026.10.2 shutdown failure is not reproduced in this current target run; its
+original cause is not identified. Real vendor/browser longevity is separate.
+
 
 For 0.1.6, 94 offline checks pass, including 20 new catalog refresh regressions
 and 24 source/route lifecycle checks. The 0.1.5 partial-reply cache erasure is

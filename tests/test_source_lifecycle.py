@@ -85,7 +85,9 @@ with patch.dict(sys.modules, stubs):
 
 
 def make_stream(source):
-    stream = types.SimpleNamespace(source=source, stop=AsyncMock())
+    stream = types.SimpleNamespace(source=source, stop=AsyncMock(), available=True,
+        dynamic_stream_settings=types.SimpleNamespace(preload_stream=False),
+        outputs=Mock(return_value={'hls': types.SimpleNamespace(idle=False)}))
     stream.update_source = Mock(side_effect=lambda value: setattr(stream, 'source', value))
     return stream
 
@@ -123,7 +125,7 @@ class SourceLifecycleTests(unittest.IsolatedAsyncioTestCase):
         stream = await self.camera.async_create_stream()
         await self.camera._async_refresh_source(self.now)
         self.assertTrue(stream.source.endswith('authSig=renewed'))
-        stream.update_source.assert_called_once_with(stream.source)
+        stream.update_source.assert_not_called()
         self.assertEqual(self.timer.call_count, 2)
         self.assertEqual(self.timer.call_args.args[1], 480)
         self.assertEqual(await self.camera.stream_source(), stream.source)
@@ -134,7 +136,7 @@ class SourceLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.camera._source_refresh_at = 0  # Renewal deadline passed while idle.
         self.assertIs(await self.camera.async_create_stream(), stream)
         self.assertTrue(stream.source.endswith('authSig=renewed'))
-        stream.update_source.assert_called_once_with(stream.source)
+        stream.update_source.assert_not_called()
         self.assertEqual(self.client.async_live_source.await_count, 2)
 
     async def test_concurrent_reuse_shares_one_new_source(self):
@@ -143,7 +145,8 @@ class SourceLifecycleTests(unittest.IsolatedAsyncioTestCase):
         result = await asyncio.gather(*(self.camera.async_create_stream() for _ in range(12)))
         self.assertTrue(all(item is stream for item in result))
         self.assertEqual(self.client.async_live_source.await_count, 2)
-        stream.update_source.assert_called_once()
+        stream.update_source.assert_not_called()
+        self.assertTrue(stream.source.endswith('authSig=renewed'))
 
     async def test_retry_after_cloud_failure_preserves_source_until_replaced(self):
         stream = await self.camera.async_create_stream()
@@ -267,6 +270,72 @@ class SourceLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['device_catalog']['device_list_complete'])
         self.assertEqual(result['device_catalog']['empty_catalog_recoveries'], 0)
         self.assertNotIn('private-', json.dumps(result))
+        await client.async_close()
+
+    async def test_idle_stream_is_retired_before_a_new_viewer_adds_outputs(self):
+        old = await self.camera.async_create_stream()
+        old.outputs.return_value = {}
+        new = await self.camera.async_create_stream()
+        self.assertIsNot(new, old)
+        old.stop.assert_awaited_once()
+        self.assertIs(self.camera.stream, new)
+
+    async def test_lost_outputs_on_a_preloaded_stream_are_stopped_before_reuse(self):
+        old = await self.camera.async_create_stream()
+        old.dynamic_stream_settings.preload_stream = True
+        original_preferences = old.dynamic_stream_settings
+        old.outputs.return_value = {}
+        new = await self.camera.async_create_stream()
+        self.assertIsNot(new, old)
+        self.assertFalse(old.dynamic_stream_settings.preload_stream)
+        self.assertTrue(original_preferences.preload_stream)
+        old.stop.assert_awaited_once()
+
+    async def test_active_preloaded_stream_with_idle_output_is_reused(self):
+        stream = await self.camera.async_create_stream()
+        stream.dynamic_stream_settings.preload_stream = True
+        stream.outputs.return_value = {'hls': types.SimpleNamespace(idle=True)}
+        self.assertIs(await self.camera.async_create_stream(), stream)
+        stream.stop.assert_not_awaited()
+
+    async def test_metadata_poll_failure_does_not_hide_a_cached_camera(self):
+        self.client.devices = {'7': api.CloudDevice('7', 'fixture')}
+        self.client.cached_devices_available = True
+        self.camera.coordinator = types.SimpleNamespace(data={}, last_update_success=False)
+        self.assertTrue(self.camera.available)
+        self.client.cached_devices_available = False
+        self.assertFalse(self.camera.available)
+
+    async def test_confirmed_removal_and_failed_worker_are_unavailable(self):
+        self.client.devices = {'7': api.CloudDevice('7', 'fixture')}
+        self.client.cached_devices_available = True
+        self.camera.stream = make_stream('fixture')
+        self.camera.stream.available = False
+        self.assertFalse(self.camera.available)
+        self.camera.stream.available = True
+        self.client.devices.clear()
+        self.assertFalse(self.camera.available)
+
+    async def test_cached_access_survives_network_failure_but_not_auth_rejection(self):
+        client = api.V380CloudClient(None, 'fixture', 'fixture')
+        client.account_id, client.access_token = '42', 'fixture'
+        client.devices['7'] = api.CloudDevice('7', 'fixture')
+        with patch.object(api.AccountClient, 'async_devices', AsyncMock(side_effect=api.CloudError('temporary'))):
+            with self.assertRaises(api.CloudError): await client.async_devices()
+        self.assertTrue(client.cached_devices_available)
+        with patch.object(api.AccountClient, 'async_devices', AsyncMock(side_effect=api.AuthError('rejected'))):
+            with self.assertRaises(api.AuthError): await client.async_devices()
+        self.assertFalse(client.cached_devices_available)
+        await client.async_close()
+
+    async def test_live_failure_diagnostics_are_revalidated(self):
+        client = api.V380CloudClient(None, 'fixture', 'fixture')
+        error = api.CloudError('authSig=private', stage='media_stream', reason='network_timeout', code=100)
+        error.diagnostic['private-url'] = 'private-secret'
+        result = client.record_live_failure(error, phase='stream')
+        self.assertEqual(result, {'stage': 'media_stream', 'detail': 'network_timeout', 'code': 100, 'phase': 'stream'})
+        self.assertEqual(client.live_stream_failures, 1)
+        self.assertNotIn('private', str(result))
         await client.async_close()
 
 

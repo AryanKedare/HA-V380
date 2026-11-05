@@ -1,6 +1,43 @@
 # Validation status — 5 November 2026
 
-## Current 0.1.6 results
+## Current 0.1.7 results
+
+The user provides a Core 2026.11.0 log with opening/demuxing errors and
+`Stream is not configured for format 'hls'`. Every logged camera URL still has
+over 100 seconds of signature lifetime. Metadata refresh failures also occur.
+These observations do not establish another expired-signature/password failure.
+
+Core's `update_source` stops the worker. During retry backoff, that can finish
+the loop and remove HLS outputs in queued cleanup. An isolated 0.1.6 replay with
+actual Core 2026.11.0 reproduces the exact ValueError. The patched camera refreshes
+the public reconnect URL without interrupting the current response and retires
+idle objects before a new viewer attaches.
+
+Transient metadata errors retain cached video availability; auth rejection,
+removal and failed video remain unavailable. Startup is limited to 25 seconds
+within Core's 30-second reader budget. Disconnect cancels the producer promptly.
+Sanitized live failure phase/stage/codes are exposed in logs and diagnostics.
+
+Full suite: **163 passed, 14 subtests passed, exit status 0** on Python 3.14.10,
+Core 2026.11.0, PyAV 19.0.0 and pytest 9.2.0 on macOS ARM64. Nine dependency/HA
+deprecation or AppKey warnings are reported. Seven pipeline tests use actual HA
+auth, local HTTP, Core's worker, HLS generation and independent fMP4 decoding;
+they cover renewal, retry, idle reuse, slow startup, disconnect and privacy.
+All account/relay/recording/proxy/adapter fixtures also complete. The unchanged
+standalone 1.4.0 self-test decodes 15 frames and embedded sources match.
+
+No vendor account or installed HA was accessed. The new runtime/configurations
+stay outside the released source tree. The historical 2026.10.2 shutdown failure
+did not occur in this current target run; its original cause is undetermined.
+Real camera/network/browser longevity still needs confirmation.
+
+Primary Core 2026.11.0 references:
+
+- [Source updates, worker retry and cleanup](https://github.com/home-assistant/core/blob/2026.11.0/homeassistant/components/stream/__init__.py)
+- [HLS endpoint startup](https://github.com/home-assistant/core/blob/2026.11.0/homeassistant/components/camera/helper.py)
+- [Source timeout](https://github.com/home-assistant/core/blob/2026.11.0/homeassistant/components/stream/const.py)
+
+## Previous 0.1.6 results
 
 The user reports local 404 followed by the new missing-camera message, and says
 reloading the integration restores playback. The actual failing vendor response
