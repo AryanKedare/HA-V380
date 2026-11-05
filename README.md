@@ -1,4 +1,4 @@
-# V380 Cloud for Home Assistant — experimental 0.1.4
+# V380 Cloud for Home Assistant — experimental 0.1.7
 
 A custom Home Assistant integration built from static analysis of the supplied
 V380 Pro **2.2.90** APKs. It signs in to the V380 cloud account, creates camera
@@ -8,16 +8,16 @@ A local camera IP address or Android runtime is not required.
 **Direct cloud live decoding is confirmed on one AWT3710D camera.** A user-run
 test decoded 201 H.264 frames at 640×360 over 10.599 seconds, using device
 protocol 31. The camera runs `AppEV2W_VA3_V1.3.6.1_20231113` software and
-`Hw_AWT3710D_XHR_V1.0_WF_20231113` firmware. Home Assistant/browser playback,
-long-running sessions, recordings and other firmware remain unverified.
+`Hw_AWT3710D_XHR_V1.0_WF_20231113` firmware. Stable long-running Home Assistant/
+browser playback, recordings and other firmware remain unverified.
 
 Live video now uses binary cloud forwarding (mode 1022), which passed that test.
 The earlier JSON/1002 path failed this camera's stream handshake. Newer cameras using
 MQTT/key exchange (`type >= 2`) are explicitly unsupported for live video.
 Their saved cloud recordings can still be supported independently.
 
-The Home Assistant adapter tests also have an unresolved interpreter shutdown
-crash, described below. This is a development build for controlled testing.
+The current full suite passes on Home Assistant Core 2026.11.0 and Python
+3.14.10. Real camera, network and browser longevity still need verification.
 
 ## Install
 
@@ -27,7 +27,7 @@ Download [install.sh](install.sh) and run it in your Home Assistant terminal:
 sh install.sh --config-dir /config
 ```
 
-The installer downloads the pinned 0.1.4 commit by default. It needs `curl`
+The installer downloads the pinned 0.1.7 commit by default. It needs `curl`
 or `wget` and `unzip`. Change `--config-dir` for a different configuration path;
 the directory must already contain `configuration.yaml`. Existing component
 files are backed up under `.v380-cloud-backups` in that config directory.
@@ -74,7 +74,7 @@ python3 -m venv .venv
 ```
 
 If the camera has no cloud recordings, use
-`.venv/bin/python v380_full_test.py --live-only`. Tester 1.3.0 uses the same
+`.venv/bin/python v380_full_test.py --live-only`. Tester 1.4.0 uses the same
 forwarding transport as the integration by default. For protocol comparison,
 `--live-transport legacy` selects the older JSON/1002 path. Failures retain
 bounded stage/result diagnostics; no response bodies or credentials are printed.
@@ -101,6 +101,13 @@ video, and serves it through its normal streaming component. Live audio is
 currently omitted. H.264 is the best-supported browser format; H.265 depends on
 the browser and device. Multi-lens panorama reconstruction is not implemented.
 
+Playback uses Home Assistant's HLS pipeline. Version 0.1.5 declines automatic
+WebRTC providers for this authenticated MPEG-TS proxy; matching an HTTP URL scheme
+does not establish compatibility with its expiring signatures or shared stream.
+Native WebRTC is not implemented. After updating, restart HA and refresh the
+dashboard so the camera capabilities are reloaded. A custom card explicitly
+forcing WebRTC must use HLS instead, or open the camera's built-in entity view.
+
 Automatic authentication recovery is enabled without an extra setting. When
 an account token expires, the integration signs in once with the credentials
 already saved in Home Assistant and retries the request. Concurrent requests
@@ -122,6 +129,22 @@ and an idle cached stream is refreshed before reuse. This prevents those paths
 from retrying an expired signature. A configured account temporarily unavailable
 during reload returns HTTP 503 with `Retry-After`, rather than a permanent 404.
 Unknown accounts and cameras still return 404. No authentication checks are bypassed.
+
+Version 0.1.6 fixes camera loss during cloud device-list refreshes. Missing or
+partial owned/shared sections update known cameras without treating omissions
+as removals. An apparent removal is checked with one additional request. If a
+previously populated catalog becomes empty, one saved-credential session refresh
+is performed before confirmation, providing the recovery that a manual reload
+can otherwise trigger. Confirmed removals are still honored. Concurrent refreshes
+share a committed result, and playback routes use that same client snapshot.
+
+Version 0.1.7 refreshes the reconnect URL without stopping active HTTP video.
+Idle streams are retired before a new viewer adds HLS outputs, isolating old
+worker cleanup. A temporary metadata-poll error no longer hides a known camera
+while video is healthy; confirmed removal, auth rejection and video failure
+remain unavailable. Startup is bounded to 25 seconds within Core's 30-second
+reader budget, and a disconnected viewer promptly cancels its upstream session.
+Diagnostics include sanitized `live_stream_failures` and `last_live_failure`.
 
 ## Browse saved cloud footage
 
@@ -155,6 +178,10 @@ not change the camera's settings.
 | Live fails to start | Regional routing, firmware framing or device authentication may differ. Capture the error and camera software/firmware version for diagnosis. |
 | Live repeatedly times out | Install 0.1.4 and restart Home Assistant. Automatic token recovery, relay reconnects and playback URL renewal are enabled. If playback still stops, capture the exact Home Assistant error line with the URL query removed. |
 | HA live URL returns 401 / 404 | A local playback authorization or route lookup failed. Version 0.1.4 fixes renewal and cached-stream reuse, and makes temporary reload failures retryable. A persistent 404 still needs account/camera availability checks. |
+| Failed to start WebRTC stream | Install 0.1.7, restart HA and refresh the dashboard. V380 advertises HLS only. Use the built-in camera view if a custom card explicitly forces WebRTC. |
+| Camera missing / playback proxy not ready | Version 0.1.6 recovers incomplete catalogs automatically. If a camera remains absent, confirm its account membership in V380 Pro and check integration diagnostics. An uninitialized local proxy still needs the entry to finish setup. |
+| Camera works after reload, then disappears | Install 0.1.7. Partial catalog replies retain known cameras, and a suddenly empty catalog gets one automatic session refresh. Integration diagnostics include catalog completeness, response result and recovery counts. |
+| Immediate exit / HLS format not configured | Install 0.1.7 and restart HA. Renewal keeps active video running, and old-worker cleanup is isolated from new viewers. Persistent upstream failure is reported with sanitized phase/stage/result diagnostics. |
 | Recording requires legacy HTTP | Use the explicit Reconfigure preference described above. |
 | No dates | Confirm this account can view saved cloud recordings in V380 Pro. |
 | Recording opens but browser cannot decode it | Try a browser/device supporting its codec. Recordings are not transcoded. |
@@ -196,18 +223,17 @@ fixtures, independent video decoding with FFmpeg/PyAV, an independent botocore
 signature comparison, and real Home Assistant authentication/proxy middleware.
 These checks make no requests to a real vendor account.
 
-The protocol, video and proxy tests complete successfully. All 15 Home Assistant
-adapter assertions also pass, but that test process crashes during interpreter
-shutdown/garbage collection. The crash reproduces with Python 3.14.0, 3.14.2 and
-3.14.8 on this macOS host; its cause is unresolved. It must not be presented as
-a clean full-suite pass or attributed to an outdated Python runtime.
+The full suite passes **163 tests and 14 subtests**, exit status 0, on Core
+2026.11.0 / Python 3.14.10. It includes real HA authentication, a live local HTTP
+video fixture, Core's worker, HLS generation and independent fragment decoding.
+Renewal, retry, idle reuse, disconnect cleanup, metadata outage and privacy are
+covered. The exact missing-HLS error reproduces against 0.1.6 during renewal in
+worker backoff; the patched worker retains its HLS output.
 
-Version 0.1.4 adds 14 passing offline source/route lifecycle tests with synthetic
-HA interfaces. Eight installer tests also pass. They cover renewal deadlines,
-idle-stream reuse, concurrent access, unload, retryable route lookup and rejection
-of unknown entries/cameras. See the validation notes for the separate HA test
-limitations. Previous 0.1.3 forwarding/API/video/recovery checks passed 41 tests
-with one loopback skip; those unchanged protocol groups were not rerun for 0.1.4.
+The historical Core 2026.10.2 adapter shutdown issue did not occur in this current
+run; its original cause remains undetermined. See the validation notes for scope
+and history. The standalone tester remains 1.4.0, with matching protocol hashes
+and a passing 15-frame video self-test.
 
 The user-run report establishes direct cloud playback on the camera listed
 above. Home Assistant/browser playback, reconnect behavior, long-running source
@@ -215,7 +241,8 @@ renewal, recordings and other camera models still need verification.
 See [validation notes](docs/VALIDATION.md) and
 [Home Assistant implementation notes](docs/HOME_ASSISTANT.md).
 
-Development target: Home Assistant Core **2026.10.2**, Python **3.14.2+**.
+Development target: Home Assistant Core **2026.11.0**, Python **3.14.2+**;
+checked with **3.14.10**.
 Install `requirements-dev.txt` in an isolated environment to run `pytest tests`.
 The standalone protocol tests do not require importing Home Assistant.
 

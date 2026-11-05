@@ -1,6 +1,107 @@
-# Validation status — 4 November 2026
+# Validation status — 5 November 2026
 
-## Current 0.1.4 results
+## Current 0.1.7 results
+
+The user provides a Core 2026.11.0 log with opening/demuxing errors and
+`Stream is not configured for format 'hls'`. Every logged camera URL still has
+over 100 seconds of signature lifetime. Metadata refresh failures also occur.
+These observations do not establish another expired-signature/password failure.
+
+Core's `update_source` stops the worker. During retry backoff, that can finish
+the loop and remove HLS outputs in queued cleanup. An isolated 0.1.6 replay with
+actual Core 2026.11.0 reproduces the exact ValueError. The patched camera refreshes
+the public reconnect URL without interrupting the current response and retires
+idle objects before a new viewer attaches.
+
+Transient metadata errors retain cached video availability; auth rejection,
+removal and failed video remain unavailable. Startup is limited to 25 seconds
+within Core's 30-second reader budget. Disconnect cancels the producer promptly.
+Sanitized live failure phase/stage/codes are exposed in logs and diagnostics.
+
+Full suite: **163 passed, 14 subtests passed, exit status 0** on Python 3.14.10,
+Core 2026.11.0, PyAV 19.0.0 and pytest 9.2.0 on macOS ARM64. Nine dependency/HA
+deprecation or AppKey warnings are reported. Seven pipeline tests use actual HA
+auth, local HTTP, Core's worker, HLS generation and independent fMP4 decoding;
+they cover renewal, retry, idle reuse, slow startup, disconnect and privacy.
+All account/relay/recording/proxy/adapter fixtures also complete. The unchanged
+standalone 1.4.0 self-test decodes 15 frames and embedded sources match.
+
+No vendor account or installed HA was accessed. The new runtime/configurations
+stay outside the released source tree. The historical 2026.10.2 shutdown failure
+did not occur in this current target run; its original cause is undetermined.
+Real camera/network/browser longevity still needs confirmation.
+
+Primary Core 2026.11.0 references:
+
+- [Source updates, worker retry and cleanup](https://github.com/home-assistant/core/blob/2026.11.0/homeassistant/components/stream/__init__.py)
+- [HLS endpoint startup](https://github.com/home-assistant/core/blob/2026.11.0/homeassistant/components/camera/helper.py)
+- [Source timeout](https://github.com/home-assistant/core/blob/2026.11.0/homeassistant/components/stream/const.py)
+
+## Previous 0.1.6 results
+
+The user reports local 404 followed by the new missing-camera message, and says
+reloading the integration restores playback. The actual failing vendor response
+has not been captured. Inspection found that missing/null sections and recognized
+partial results could replace the entire device map with an empty/subset map.
+An isolated replay against 0.1.5 reproduces that cache loss; the patched source
+retains the previously known camera for the same partial response.
+
+Version 0.1.6 preserves known entries for non-authoritative sections and confirms
+removals with one additional request. A suddenly empty catalog performs one
+saved-credential login before confirmation. Confirmed removals still take effect;
+failed login/request/parse cannot erase the committed map. Concurrent refreshes
+share a result, and routes use that client map rather than stale coordinator data.
+
+Checks completed successfully: 20 catalog regressions, 24 source/route lifecycle,
+20 auth/relay recovery, six forwarding, four shared parsing, 12 standalone report
+and eight installer checks: 94 total. Catalog coverage includes partial result
+codes, missing sections, corrupt shares, true removal, transient omissions, empty
+catalog login recovery, failed confirmation, token expiry, concurrency and unload.
+Route tests cover snapshot ordering, removed-camera rejection and retryable
+incomplete lookup. Diagnostics/report privacy is checked with synthetic secrets.
+
+Tester 1.4.0 embeds the matching account implementation and reports aggregate
+catalog status/counters. Its self-test decodes 15 synthetic frames. Python/JSON,
+translation parity, embedded hashes and ZIP/source equality are checked. No vendor
+requests or installed HA changes were made. Target HA/browser longevity and the
+previously documented full adapter-suite shutdown failure remain unverified.
+
+## Previous 0.1.5 results
+
+The user confirms playback initially worked after 0.1.4, then stopped with
+`Failed to start WebRTC stream` and the generic `cloud_unavailable` translation.
+Their screenshot identifies Core 2026.10.4 on HA OS. The exact underlying source
+failure is not established by that translated message.
+
+The official Core 2026.10.4 camera and go2rtc sources confirm that automatic
+providers are matched by source URL scheme; go2rtc calls `stream_source()` again
+on an offer and forwards its HomeAssistantError to the frontend. Version 0.1.5
+declines automatic providers for the authenticated MPEG-TS source so Core uses
+its shared HLS stream. It also reports absent camera metadata, an uninitialized
+proxy and unreadable camera credentials separately. Generic cloud failures and
+real account authentication errors still propagate.
+
+Current checks pass: 20 offline source/route lifecycle tests with synthetic HA
+interfaces, 20 portable auth/relay recovery tests, and eight installer tests.
+The six added source checks cover provider opt-out without source access,
+source-error classification, sanitized logging, retry after missing metadata,
+and the two API error subtypes.
+
+An additional compatibility harness extracts and executes the exact Core
+2026.10.4 provider/capability methods with a synthetic backend. It reproduces
+automatic WebRTC/HLS capability selection on the prior camera and confirms
+HLS-only capabilities after the patch, without provider/source lookup. This is
+not a full HA installation or browser test. The real HA fixture now includes an
+HLS capability assertion; its target environment remains unavailable. No vendor
+requests or installed HA changes were made. The prior adapter shutdown failure
+remains unresolved. The portable protocol and tester 1.3.0 are unchanged.
+
+Primary references:
+
+- [Core 2026.10.4 camera provider/capability selection](https://github.com/home-assistant/core/blob/2026.10.4/homeassistant/components/camera/__init__.py)
+- [Core 2026.10.4 go2rtc source preparation](https://github.com/home-assistant/core/blob/2026.10.4/homeassistant/components/go2rtc/__init__.py)
+
+## Previous 0.1.4 results
 
 The user confirms HA 0.1.3 playback starts, then fails with local HTTP 404/401.
 Both log lines use the same HA live path and a signature with a ten-minute

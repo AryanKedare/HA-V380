@@ -20,7 +20,8 @@ import pytest
 
 pytest.importorskip("homeassistant")
 from homeassistant import loader
-from homeassistant.components.camera import CameraEntityFeature
+from homeassistant.components.camera import Camera, CameraEntityFeature
+from homeassistant.components.camera.const import StreamType
 from homeassistant.components.media_player import BrowseError
 from homeassistant.components.media_source import MediaSourceItem, Unresolvable
 from homeassistant.config_entries import (
@@ -84,10 +85,13 @@ async def _hass(tmp_path: Path):
 
 def _client() -> SimpleNamespace:
     """Mock only the external cloud boundary."""
+    device = CloudDevice("camera/one", "Front door")
     return SimpleNamespace(
+        devices={device.device_id: device},
+        cached_devices_available=True,
         bind_home_assistant=Mock(),
         async_login=AsyncMock(return_value="fixture-account"),
-        async_devices=AsyncMock(return_value=[CloudDevice("camera/one", "Front door")]),
+        async_devices=AsyncMock(return_value=[device]),
         async_live_source=AsyncMock(return_value="https://media.example.invalid/live.m3u8"),
         async_recording_dates=AsyncMock(return_value=["2026-10-16", "2026-10-17"]),
         async_recordings=AsyncMock(return_value=[CloudRecording("clip/one", "12:30 motion", "video/mp4")]),
@@ -148,7 +152,7 @@ def test_manifest_and_user_flow(tmp_path):
         async with _hass(tmp_path) as hass:
             integration = await loader.async_get_integration(hass, DOMAIN)
             assert integration.manifest["config_flow"] is True
-            assert integration.manifest["version"] == "0.1.4"
+            assert integration.manifest["version"] == "0.1.7"
             assert set(integration.dependencies) == {"http", "media_source", "stream"}
             flow = _flow(hass)
             result = await flow.async_step_user()
@@ -266,7 +270,8 @@ def test_camera_lifecycle_and_unknown_online_status(tmp_path):
                     await camera.stream_source()
             assert auth.value.translation_key == "invalid_auth"
             assert reauth == [(entry, hass)]
-            entry.runtime_data.coordinator.async_set_updated_data({"camera/one": CloudDevice("camera/one", "Front door", False)})
+            client.devices["camera/one"] = CloudDevice("camera/one", "Front door", False)
+            entry.runtime_data.coordinator.async_set_updated_data(dict(client.devices))
             assert not camera.available
             diagnostics = await async_get_config_entry_diagnostics(hass, entry)
             assert diagnostics["offline_camera_count"] == 1
@@ -334,7 +339,9 @@ def test_camera_renews_signed_source_and_cancels_on_unload(tmp_path):
             entry.runtime_data = V380RuntimeData(client, coordinator, "fixture-account")
             camera = V380CloudCamera(entry, device)
             camera.hass = hass
-            stream = SimpleNamespace(update_source=Mock(), stop=AsyncMock(), available=True)
+            stream = SimpleNamespace(update_source=Mock(), stop=AsyncMock(), available=True,
+                dynamic_stream_settings=SimpleNamespace(preload_stream=False),
+                outputs=Mock(return_value={'hls': SimpleNamespace(idle=False)}))
             first_timer, renewed_timer = Mock(), Mock()
             client.async_live_source.side_effect = [
                 "https://ha.example.invalid/live?authSig=first",
@@ -350,7 +357,8 @@ def test_camera_renews_signed_source_and_cancels_on_unload(tmp_path):
                 assert timer.call_args.args[1] == 8 * 60
                 callback = timer.call_args.args[2]
                 await callback(datetime.now(timezone.utc))
-                stream.update_source.assert_called_once_with("https://ha.example.invalid/live?authSig=renewed")
+                assert stream.source == "https://ha.example.invalid/live?authSig=renewed"
+                stream.update_source.assert_not_called()
                 assert timer.call_count == 2
                 await camera.async_will_remove_from_hass()
                 renewed_timer.assert_called_once_with()
@@ -374,12 +382,36 @@ def test_camera_refreshes_existing_stream_before_reuse(tmp_path):
             camera.hass = hass
             with patch("custom_components.v380_cloud.camera.async_call_later"):
                 await camera.stream_source()
-                stream = SimpleNamespace(update_source=Mock(), stop=AsyncMock(), available=True)
+                stream = SimpleNamespace(update_source=Mock(), stop=AsyncMock(), available=True,
+                    dynamic_stream_settings=SimpleNamespace(preload_stream=False),
+                    outputs=Mock(return_value={'hls': SimpleNamespace(idle=False)}))
                 camera.stream = stream
                 camera._source_refresh_at = 0
                 client.async_live_source.return_value = "https://ha.example.invalid/live?authSig=renewed"
                 assert await camera.async_create_stream() is stream
-                stream.update_source.assert_called_once_with(client.async_live_source.return_value)
+                assert stream.source == client.async_live_source.return_value
+                stream.update_source.assert_not_called()
                 assert client.async_live_source.await_count == 2
                 await camera.async_will_remove_from_hass()
+    asyncio.run(run())
+
+
+def test_camera_advertises_hls_without_automatic_webrtc_provider(tmp_path):
+    async def run():
+        async with _hass(tmp_path) as hass:
+            entry = _entry(hass)
+            client = _client()
+            coordinator = V380CloudCoordinator(hass, entry, client)
+            device = client.async_devices.return_value[0]
+            coordinator.async_set_updated_data({device.device_id: device})
+            entry.runtime_data = V380RuntimeData(client, coordinator, "fixture-account")
+            camera = V380CloudCamera(entry, device)
+            camera.hass = hass
+            with patch(f"{Camera.__module__}.async_get_supported_provider", new_callable=AsyncMock) as lookup:
+                await camera.async_refresh_providers(write_state=False)
+            lookup.assert_not_awaited()
+            client.async_live_source.assert_not_awaited()
+            assert camera.webrtc_provider is None
+            assert camera.camera_capabilities.frontend_stream_types == {StreamType.HLS}
+            assert camera.supported_features & CameraEntityFeature.STREAM
     asyncio.run(run())

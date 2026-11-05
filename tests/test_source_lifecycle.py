@@ -81,10 +81,13 @@ stubs = {
 with patch.dict(sys.modules, stubs):
     camera = importlib.import_module(PACKAGE + '.camera')
     proxy = importlib.import_module(PACKAGE + '.proxy')
+    diagnostics = importlib.import_module(PACKAGE + '.diagnostics')
 
 
 def make_stream(source):
-    stream = types.SimpleNamespace(source=source, stop=AsyncMock())
+    stream = types.SimpleNamespace(source=source, stop=AsyncMock(), available=True,
+        dynamic_stream_settings=types.SimpleNamespace(preload_stream=False),
+        outputs=Mock(return_value={'hls': types.SimpleNamespace(idle=False)}))
     stream.update_source = Mock(side_effect=lambda value: setattr(stream, 'source', value))
     return stream
 
@@ -122,7 +125,7 @@ class SourceLifecycleTests(unittest.IsolatedAsyncioTestCase):
         stream = await self.camera.async_create_stream()
         await self.camera._async_refresh_source(self.now)
         self.assertTrue(stream.source.endswith('authSig=renewed'))
-        stream.update_source.assert_called_once_with(stream.source)
+        stream.update_source.assert_not_called()
         self.assertEqual(self.timer.call_count, 2)
         self.assertEqual(self.timer.call_args.args[1], 480)
         self.assertEqual(await self.camera.stream_source(), stream.source)
@@ -133,7 +136,7 @@ class SourceLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.camera._source_refresh_at = 0  # Renewal deadline passed while idle.
         self.assertIs(await self.camera.async_create_stream(), stream)
         self.assertTrue(stream.source.endswith('authSig=renewed'))
-        stream.update_source.assert_called_once_with(stream.source)
+        stream.update_source.assert_not_called()
         self.assertEqual(self.client.async_live_source.await_count, 2)
 
     async def test_concurrent_reuse_shares_one_new_source(self):
@@ -142,7 +145,8 @@ class SourceLifecycleTests(unittest.IsolatedAsyncioTestCase):
         result = await asyncio.gather(*(self.camera.async_create_stream() for _ in range(12)))
         self.assertTrue(all(item is stream for item in result))
         self.assertEqual(self.client.async_live_source.await_count, 2)
-        stream.update_source.assert_called_once()
+        stream.update_source.assert_not_called()
+        self.assertTrue(stream.source.endswith('authSig=renewed'))
 
     async def test_retry_after_cloud_failure_preserves_source_until_replaced(self):
         stream = await self.camera.async_create_stream()
@@ -201,6 +205,139 @@ class SourceLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.camera.stream)
         self.assertEqual(self.client.async_live_source.await_count, 1)
 
+    async def test_automatic_webrtc_provider_is_declined_without_source_lookup(self):
+        provider_lookup = AsyncMock()
+        self.assertIsNone(await self.camera._async_get_supported_webrtc_provider(provider_lookup))
+        provider_lookup.assert_not_awaited()
+        self.client.async_live_source.assert_not_awaited()
+        self.assertTrue(self.camera._attr_supported_features & Features.STREAM)
+
+    async def test_specific_source_errors_are_not_mislabeled_as_cloud_response_errors(self):
+        for error, key in (
+            (api.CameraUnavailableError('fixture'), 'camera_unavailable'),
+            (api.PlaybackNotReadyError('fixture'), 'playback_not_ready'),
+            (api.CloudError('fixture', stage='device_credentials', reason='invalid_metadata'),
+             'camera_credentials_unavailable'),
+        ):
+            self.client.async_live_source.side_effect = error
+            with self.assertRaises(HomeAssistantError) as caught:
+                await self.camera.stream_source()
+            self.assertEqual(caught.exception.translation_key, key)
+        self.entry.async_start_reauth.assert_not_called()
+
+    async def test_source_failure_logging_uses_sanitized_diagnostics_only(self):
+        self.client.async_live_source.side_effect = api.CloudError(
+            'private fixture password and authSig=do-not-log', stage='device_credentials', reason='invalid_metadata')
+        with self.assertLogs(camera._LOGGER, level='DEBUG') as logs:
+            with self.assertRaises(HomeAssistantError):
+                await self.camera.stream_source()
+        output = ' '.join(logs.output)
+        self.assertIn('invalid_metadata', output)
+        self.assertNotIn('private fixture', output)
+        self.assertNotIn('authSig', output)
+
+    async def test_missing_camera_metadata_during_renewal_is_retried(self):
+        stream = await self.camera.async_create_stream()
+        original = stream.source
+        self.client.async_live_source.side_effect = api.CameraUnavailableError('fixture')
+        await self.camera._async_refresh_source(self.now)
+        self.assertEqual(stream.source, original)
+        self.assertEqual(self.timer.call_args.args[1], 60)
+        self.entry.async_start_reauth.assert_not_called()
+
+    async def test_api_missing_camera_has_a_specific_cloud_error_subtype(self):
+        client = api.V380CloudClient(None, 'fixture', 'fixture')
+        with patch.object(client, 'async_devices', AsyncMock(return_value=[])):
+            with self.assertRaises(api.CameraUnavailableError):
+                await client.async_live_source('7')
+        await client.async_close()
+
+    async def test_api_unbound_proxy_has_a_specific_cloud_error_subtype(self):
+        client = api.V380CloudClient(None, 'fixture', 'fixture')
+        client.devices['7'] = api.CloudDevice('7', 'fixture', metadata={'device_id': 7})
+        with self.assertRaises(api.PlaybackNotReadyError):
+            await client.async_live_source('7')
+        await client.async_close()
+
+    async def test_catalog_diagnostics_expose_counts_without_camera_or_account_data(self):
+        import json
+        client = api.V380CloudClient(None, 'private-account-fixture', 'private-password-fixture')
+        client.access_token = 'private-token-fixture'
+        client.devices['private-camera-fixture'] = api.CloudDevice('private-camera-fixture', 'private-name-fixture')
+        coordinator = types.SimpleNamespace(data=client.devices, last_update_success=True)
+        entry = types.SimpleNamespace(runtime_data=types.SimpleNamespace(client=client, coordinator=coordinator))
+        result = await diagnostics.async_get_config_entry_diagnostics(object(), entry)
+        self.assertFalse(result['device_catalog']['device_list_complete'])
+        self.assertEqual(result['device_catalog']['empty_catalog_recoveries'], 0)
+        self.assertNotIn('private-', json.dumps(result))
+        await client.async_close()
+
+    async def test_idle_stream_is_retired_before_a_new_viewer_adds_outputs(self):
+        old = await self.camera.async_create_stream()
+        old.outputs.return_value = {}
+        new = await self.camera.async_create_stream()
+        self.assertIsNot(new, old)
+        old.stop.assert_awaited_once()
+        self.assertIs(self.camera.stream, new)
+
+    async def test_lost_outputs_on_a_preloaded_stream_are_stopped_before_reuse(self):
+        old = await self.camera.async_create_stream()
+        old.dynamic_stream_settings.preload_stream = True
+        original_preferences = old.dynamic_stream_settings
+        old.outputs.return_value = {}
+        new = await self.camera.async_create_stream()
+        self.assertIsNot(new, old)
+        self.assertFalse(old.dynamic_stream_settings.preload_stream)
+        self.assertTrue(original_preferences.preload_stream)
+        old.stop.assert_awaited_once()
+
+    async def test_active_preloaded_stream_with_idle_output_is_reused(self):
+        stream = await self.camera.async_create_stream()
+        stream.dynamic_stream_settings.preload_stream = True
+        stream.outputs.return_value = {'hls': types.SimpleNamespace(idle=True)}
+        self.assertIs(await self.camera.async_create_stream(), stream)
+        stream.stop.assert_not_awaited()
+
+    async def test_metadata_poll_failure_does_not_hide_a_cached_camera(self):
+        self.client.devices = {'7': api.CloudDevice('7', 'fixture')}
+        self.client.cached_devices_available = True
+        self.camera.coordinator = types.SimpleNamespace(data={}, last_update_success=False)
+        self.assertTrue(self.camera.available)
+        self.client.cached_devices_available = False
+        self.assertFalse(self.camera.available)
+
+    async def test_confirmed_removal_and_failed_worker_are_unavailable(self):
+        self.client.devices = {'7': api.CloudDevice('7', 'fixture')}
+        self.client.cached_devices_available = True
+        self.camera.stream = make_stream('fixture')
+        self.camera.stream.available = False
+        self.assertFalse(self.camera.available)
+        self.camera.stream.available = True
+        self.client.devices.clear()
+        self.assertFalse(self.camera.available)
+
+    async def test_cached_access_survives_network_failure_but_not_auth_rejection(self):
+        client = api.V380CloudClient(None, 'fixture', 'fixture')
+        client.account_id, client.access_token = '42', 'fixture'
+        client.devices['7'] = api.CloudDevice('7', 'fixture')
+        with patch.object(api.AccountClient, 'async_devices', AsyncMock(side_effect=api.CloudError('temporary'))):
+            with self.assertRaises(api.CloudError): await client.async_devices()
+        self.assertTrue(client.cached_devices_available)
+        with patch.object(api.AccountClient, 'async_devices', AsyncMock(side_effect=api.AuthError('rejected'))):
+            with self.assertRaises(api.AuthError): await client.async_devices()
+        self.assertFalse(client.cached_devices_available)
+        await client.async_close()
+
+    async def test_live_failure_diagnostics_are_revalidated(self):
+        client = api.V380CloudClient(None, 'fixture', 'fixture')
+        error = api.CloudError('authSig=private', stage='media_stream', reason='network_timeout', code=100)
+        error.diagnostic['private-url'] = 'private-secret'
+        result = client.record_live_failure(error, phase='stream')
+        self.assertEqual(result, {'stage': 'media_stream', 'detail': 'network_timeout', 'code': 100, 'phase': 'stream'})
+        self.assertEqual(client.live_stream_failures, 1)
+        self.assertNotIn('private', str(result))
+        await client.async_close()
+
 
 class RouteLifecycleTests(unittest.TestCase):
     def hass(self, *, entry=None, runtime=None):
@@ -221,18 +358,20 @@ class RouteLifecycleTests(unittest.TestCase):
                 proxy._client(self.hass(entry=entry), 'entry', '7')
 
     def test_failed_empty_snapshot_is_retryable_but_unknown_camera_is_not(self):
-        runtime = types.SimpleNamespace(client=object(), coordinator=types.SimpleNamespace(
+        runtime = types.SimpleNamespace(client=types.SimpleNamespace(devices={}, device_list_complete=False), coordinator=types.SimpleNamespace(
             data=None, last_update_success=False))
         hass = self.hass(runtime=runtime)
         with self.assertRaises(web.HTTPServiceUnavailable):
             proxy._client(hass, 'entry', '7')
         runtime.coordinator.data = {'8': object()}
         runtime.coordinator.last_update_success = True
+        runtime.client.devices = {'8': object()}
+        runtime.client.device_list_complete = True
         with self.assertRaises(web.HTTPNotFound):
             proxy._client(hass, 'entry', '7')
 
     def test_valid_camera_survives_a_failed_poll_with_cached_metadata(self):
-        runtime = types.SimpleNamespace(client=object(), coordinator=types.SimpleNamespace(
+        runtime = types.SimpleNamespace(client=types.SimpleNamespace(devices={'7': object()}, device_list_complete=True), coordinator=types.SimpleNamespace(
             data={'7': object()}, last_update_success=False))
         self.assertIs(proxy._client(self.hass(runtime=runtime), 'entry', '7'), runtime.client)
 
@@ -240,7 +379,24 @@ class RouteLifecycleTests(unittest.TestCase):
         hass = self.hass(entry=types.SimpleNamespace(domain='v380_cloud'))
         with self.assertRaises(web.HTTPServiceUnavailable):
             proxy._client(hass, 'entry', '7')
-        runtime = types.SimpleNamespace(client=object(), coordinator=types.SimpleNamespace(
+        runtime = types.SimpleNamespace(client=types.SimpleNamespace(devices={'7': object()}, device_list_complete=True), coordinator=types.SimpleNamespace(
             data={'7': object()}, last_update_success=True))
         hass.data['v380_cloud']['entry'] = runtime
         self.assertIs(proxy._client(hass, 'entry', '7'), runtime.client)
+
+    def test_route_uses_newer_client_catalog_before_coordinator_catches_up(self):
+        runtime = types.SimpleNamespace(client=types.SimpleNamespace(devices={'7': object()}, device_list_complete=True),
+            coordinator=types.SimpleNamespace(data={}, last_update_success=True))
+        self.assertIs(proxy._client(self.hass(runtime=runtime), 'entry', '7'), runtime.client)
+
+    def test_stale_coordinator_cannot_authorize_a_removed_camera(self):
+        runtime = types.SimpleNamespace(client=types.SimpleNamespace(devices={}, device_list_complete=True),
+            coordinator=types.SimpleNamespace(data={'7': object()}, last_update_success=True))
+        with self.assertRaises(web.HTTPNotFound):
+            proxy._client(self.hass(runtime=runtime), 'entry', '7')
+
+    def test_incomplete_catalog_is_retryable_for_an_unknown_camera(self):
+        runtime = types.SimpleNamespace(client=types.SimpleNamespace(devices={}, device_list_complete=False),
+            coordinator=types.SimpleNamespace(data={}, last_update_success=True))
+        with self.assertRaises(web.HTTPServiceUnavailable):
+            proxy._client(self.hass(runtime=runtime), 'entry', '7')

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable, Coroutine
+from copy import copy
 from datetime import datetime
 import logging
 from typing import TYPE_CHECKING
@@ -16,7 +18,14 @@ from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import V380CloudCoordinator, V380ConfigEntry
-from .api import AuthError, CloudDevice, CloudError, UnsupportedError
+from .api import (
+    AuthError,
+    CameraUnavailableError,
+    CloudDevice,
+    CloudError,
+    PlaybackNotReadyError,
+    UnsupportedError,
+)
 from .const import DOMAIN
 
 if TYPE_CHECKING:
@@ -66,6 +75,8 @@ class V380CloudCamera(CoordinatorEntity[V380CloudCoordinator], Camera):
         self._entry = entry
         self._device_id = device.device_id
         self._source_lock = asyncio.Lock()
+        self._stream_lifecycle_lock = asyncio.Lock()
+        self._retiring_stream: Stream | None = None
         self._source: str | None = None
         self._source_refresh_at = 0.0
         self._refresh_source_unsub: CALLBACK_TYPE | None = None
@@ -79,26 +90,67 @@ class V380CloudCamera(CoordinatorEntity[V380CloudCoordinator], Camera):
 
     @property
     def available(self) -> bool:
-        """Report unavailable when the cloud reports a camera offline."""
-        device = self.coordinator.data.get(self._device_id)
-        return super().available and device is not None and device.online is not False
+        """Keep cached video available through transient metadata poll failures."""
+        client = self._entry.runtime_data.client
+        device = client.devices.get(self._device_id)
+        return (
+            not self._removing and client.cached_devices_available
+            and device is not None and device.online is not False
+            and (self.stream is None or self.stream.available)
+        )
 
     @property
     def use_stream_for_stills(self) -> bool:
         """Let Home Assistant derive thumbnails from its shared stream."""
         return True
 
+    async def _async_get_supported_webrtc_provider[_T](
+        self, fn: Callable[[HomeAssistant, Camera], Coroutine[None, None, _T | None]]
+    ) -> _T | None:
+        """Keep this authenticated MPEG-TS proxy on HA's shared HLS pipeline.
+
+        Automatic HTTP-scheme matching does not establish that a provider can
+        manage this source's signature renewal or reuse HA's existing stream.
+        V380 has no native WebRTC implementation; Core still advertises HLS.
+        """
+        return None
+
     async def stream_source(self) -> str | None:
         """Return the active source without postponing its renewal deadline."""
         return await self._async_source()
 
     async def async_create_stream(self) -> Stream | None:
-        """Refresh a cached HA stream before it is reused after an idle period."""
-        if self._removing:
-            return None
-        if self.stream is not None:
-            await self.stream_source()
-        return await super().async_create_stream()
+        """Reuse active workers; retire idle ones before adding new HLS outputs."""
+        async with self._stream_lifecycle_lock:
+            if self._removing:
+                return None
+            if stream := self.stream:
+                outputs = stream.outputs()
+                if not outputs or (
+                    not stream.dynamic_stream_settings.preload_stream
+                    and all(output.idle for output in outputs.values())
+                ):
+                    # An old worker's queued cleanup must not remove a new
+                    # viewer's HLS output from this same Stream object.
+                    self.stream = None
+                    self._retiring_stream = stream
+                    try:
+                        await self._stop_stream(stream)
+                    finally:
+                        self._retiring_stream = None
+                else:
+                    await self.stream_source()
+            if self._removing:
+                return None
+            return await super().async_create_stream()
+
+    @staticmethod
+    async def _stop_stream(stream: Stream) -> None:
+        """Join a worker even when the camera used preloading."""
+        settings = copy(stream.dynamic_stream_settings)
+        settings.preload_stream = False
+        stream.dynamic_stream_settings = settings
+        await stream.stop()
 
     async def _async_source(self, *, force: bool = False) -> str | None:
         """Issue and apply a source under one lock, with one fixed deadline."""
@@ -124,16 +176,35 @@ class V380CloudCamera(CoordinatorEntity[V380CloudCoordinator], Camera):
                 raise HomeAssistantError(
                     translation_domain=DOMAIN, translation_key="unsupported_live"
                 ) from err
-            except CloudError as err:
+            except CameraUnavailableError as err:
                 raise HomeAssistantError(
-                    translation_domain=DOMAIN, translation_key="cloud_unavailable"
+                    translation_domain=DOMAIN, translation_key="camera_unavailable"
+                ) from err
+            except PlaybackNotReadyError as err:
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN, translation_key="playback_not_ready"
+                ) from err
+            except CloudError as err:
+                # Diagnostics contain fixed enums and bounded numbers only.
+                # Do not log exception text, request URLs or response bodies.
+                _LOGGER.debug("V380 live source preparation failed: %s", err.diagnostic)
+                key = (
+                    "camera_credentials_unavailable"
+                    if err.diagnostic.get("stage") == "device_credentials"
+                    else "cloud_unavailable"
+                )
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN, translation_key=key
                 ) from err
             if self._removing:
                 return None
             self._source = source
             self._source_refresh_at = loop.time() + _SOURCE_REFRESH_SECONDS
             if self.stream is not None:
-                self.stream.update_source(source)
+                # Authentication is checked when opening the HTTP request.
+                # Renew the public reconnect source without interrupting the
+                # current connection; update_source() stops HA's worker.
+                self.stream.source = source
             self._schedule_source_refresh(_SOURCE_REFRESH_SECONDS)
             return source
 
@@ -156,7 +227,9 @@ class V380CloudCamera(CoordinatorEntity[V380CloudCoordinator], Camera):
         try:
             await self._async_source(force=True)
         except HomeAssistantError as err:
-            if err.translation_key == "cloud_unavailable":
+            if err.translation_key in {
+                "cloud_unavailable", "camera_unavailable", "playback_not_ready"
+            }:
                 _LOGGER.debug("Unable to renew the V380 cloud camera source; retrying")
                 self._schedule_source_refresh(_SOURCE_RETRY_SECONDS)
             return
@@ -168,9 +241,10 @@ class V380CloudCamera(CoordinatorEntity[V380CloudCoordinator], Camera):
         if self._refresh_source_unsub is not None:
             self._refresh_source_unsub()
             self._refresh_source_unsub = None
-        if self.stream is not None:
-            await self.stream.stop()
-            self.stream = None
+        streams = [stream for stream in (self.stream, self._retiring_stream) if stream is not None]
+        self.stream = None
+        for stream in streams:
+            await self._stop_stream(stream)
         await super().async_will_remove_from_hass()
 
     async def async_camera_image(

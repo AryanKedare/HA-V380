@@ -127,6 +127,13 @@ class AccountClient:
         self.billing_url = API_BASE
         self.account_metadata: dict[str, Any] = {}
         self.devices: dict[str, CloudDevice] = {}
+        self.device_list_complete = False
+        self.last_device_list_result: int | None = None
+        self.partial_device_list_responses = 0
+        self.device_removal_checks = 0
+        self.empty_catalog_recoveries = 0
+        self._devices_lock = asyncio.Lock()
+        self._devices_generation = 0
         self._auth_lock = asyncio.Lock()
         self._auth_generation = 0
         self._credentials_rejected = False
@@ -229,7 +236,7 @@ class AccountClient:
                 await self._login_locked()
 
     async def _recover_login(self, generation: int) -> None:
-        """Recover one rejected token; concurrent requests share the new login."""
+        """Refresh saved credentials once; concurrent callers share the login."""
         async with self._auth_lock:
             if self._closed:
                 raise CloudError("Cloud session is closed")
@@ -239,6 +246,55 @@ class AccountClient:
             await self._login_locked()
 
     async def async_devices(self) -> list[CloudDevice]:
+        """Commit one verified catalog; concurrent refreshes share its result."""
+        generation = self._devices_generation
+        async with self._devices_lock:
+            if self._closed:
+                raise CloudError("Cloud session is closed")
+            if self._devices_generation != generation:
+                return list(self.devices.values())
+            previous = dict(self.devices)
+            try:
+                devices, complete = await self._device_snapshot(previous)
+                missing = previous.keys() - devices.keys()
+                if missing:
+                    self.device_removal_checks = min(self.device_removal_checks + 1, 65535)
+                    if not devices:
+                        # Reloading HA restores some stale cloud sessions. Do
+                        # that bounded recovery here before confirming an empty
+                        # catalog, without treating network errors as bad auth.
+                        self.empty_catalog_recoveries = min(self.empty_catalog_recoveries + 1, 65535)
+                        await self._recover_login(self._auth_generation)
+                    confirmed, complete = await self._device_snapshot({**previous, **devices})
+                    # A camera absent only in the second reply is not a
+                    # confirmed removal. Keep it until a subsequent refresh.
+                    unconfirmed = (previous.keys() - confirmed.keys()) - missing
+                    confirmed.update((uid, previous[uid]) for uid in unconfirmed)
+                    devices = confirmed
+                    complete = complete and not unconfirmed
+                if self._closed:
+                    raise CloudError("Cloud session is closed")
+            except CloudError:
+                self.device_list_complete = False
+                raise
+            self.devices = devices
+            self.device_list_complete = bool(complete)
+            self._devices_generation += 1
+            return list(devices.values())
+
+    async def _device_snapshot(
+        self, previous: dict[str, CloudDevice]
+    ) -> tuple[dict[str, CloudDevice], bool]:
+        response = await self._device_response()
+        devices, complete = self._merge_devices(response, previous)
+        result = response.get("result")
+        self.last_device_list_result = result if type(result) is int and result in (0, 10005, 10007) else None
+        if not complete:
+            self.partial_device_list_responses = min(self.partial_device_list_responses + 1, 65535)
+        return devices, complete
+
+    async def _device_response(self) -> dict[str, Any]:
+        """Request a catalog, retaining the existing one through token recovery."""
         for attempt in range(2):
             await self._ensure_login()
             generation = self._auth_generation
@@ -256,32 +312,52 @@ class AccountClient:
                 await self._recover_login(generation)
         if response.get("renew_token") is True:
             await self._renew_token(generation)
+        return response
+
+    @staticmethod
+    def _merge_devices(
+        response: dict[str, Any], previous: dict[str, CloudDevice]
+    ) -> tuple[dict[str, CloudDevice], bool]:
+        """Missing/partial sections update known cameras but cannot remove them."""
         rows = response.get("data")
         shared = response.get("data_share")
-        if rows is None:
-            rows = []
-        if shared is None:
-            shared = []
-        if not isinstance(rows, list) or not isinstance(shared, list):
+        partial = response.get("result") in (10005, 10007)
+        if (
+            rows is not None and not isinstance(rows, list)
+            or shared is not None and not isinstance(shared, list)
+        ):
             raise CloudError("Cloud device list has an unsupported shape")
+        if rows is None and shared is None and not (partial and previous):
+            raise CloudError("Cloud device list did not contain a camera catalog")
+        owned_complete = not partial and isinstance(rows, list)
+        shared_complete = not partial and isinstance(shared, list)
         normalized_shared = []
-        for item in shared:
+        for item in shared or []:
             try:
                 normalized_shared.append(normalize_shared_device(item))
             except (ValueError, TypeError, AttributeError):
                 # DeviceManager.parseShareDevice also drops malformed shares.
+                # A dropped row cannot confirm that a known share was removed.
+                shared_complete = False
                 continue
-        devices: dict[str, CloudDevice] = {}
-        for item in rows + normalized_shared:
+        updates: dict[str, CloudDevice] = {}
+        for item in rows or []:
             if not isinstance(item, dict):
                 raise CloudError("Cloud device list contains an invalid device")
             uid = item.get("device_id")
-            if not isinstance(uid, int) or uid <= 0:
+            if type(uid) is not int or uid <= 0:
                 raise CloudError("Cloud device list contains an invalid device ID")
-            device = CloudDevice(str(uid), str(item.get("nickname") or f"V380 {uid}"), metadata=item)
-            devices.setdefault(device.device_id, device)
-        self.devices = devices
-        return list(devices.values())
+            metadata = {**item, "shared": False}
+            updates[str(uid)] = CloudDevice(str(uid), str(item.get("nickname") or f"V380 {uid}"), metadata=metadata)
+        for item in normalized_shared:
+            uid = item["device_id"]
+            updates.setdefault(str(uid), CloudDevice(str(uid), str(item.get("nickname") or f"V380 {uid}"), metadata=item))
+        devices = {
+            uid: device for uid, device in previous.items()
+            if not (shared_complete if device.metadata.get("shared") is True else owned_complete)
+        }
+        devices.update(updates)
+        return devices, owned_complete and shared_complete
 
     async def _renew_token(self, generation: int | None = None) -> None:
         async with self._auth_lock:
@@ -313,5 +389,7 @@ class AccountClient:
         self._closed = True
         self.access_token = ""
         self.devices.clear()
+        self.device_list_complete = False
+        self.last_device_list_result = None
         self.account_metadata.clear()
         self._password = ""

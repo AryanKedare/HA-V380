@@ -5,7 +5,7 @@
 # Also check installed HA: python3 v380_full_test.py --ha-url http://homeassistant.local:8123
 # The audited protocol modules below are embedded as readable source literals.
 # They are loaded from this file only; no remote code is downloaded or executed.
-# Source: V380 Cloud 0.1.3; protocol references are embedded below.
+# Source: V380 Cloud 0.1.6; protocol references are embedded below.
 """Test V380 cloud login, live video decoding and recordings; optionally check Home Assistant.
 Credentials are prompted locally. The report excludes account/camera IDs, secrets and URLs.
 Requires Python3.11+ and aiohttp, cryptography, av, certifi.
@@ -265,6 +265,13 @@ _EMBEDDED_PROTOCOL = {
         '        self.billing_url = API_BASE\n'
         '        self.account_metadata: dict[str, Any] = {}\n'
         '        self.devices: dict[str, CloudDevice] = {}\n'
+        '        self.device_list_complete = False\n'
+        '        self.last_device_list_result: int | None = None\n'
+        '        self.partial_device_list_responses = 0\n'
+        '        self.device_removal_checks = 0\n'
+        '        self.empty_catalog_recoveries = 0\n'
+        '        self._devices_lock = asyncio.Lock()\n'
+        '        self._devices_generation = 0\n'
         '        self._auth_lock = asyncio.Lock()\n'
         '        self._auth_generation = 0\n'
         '        self._credentials_rejected = False\n'
@@ -367,7 +374,7 @@ _EMBEDDED_PROTOCOL = {
         '                await self._login_locked()\n'
         '\n'
         '    async def _recover_login(self, generation: int) -> None:\n'
-        '        """Recover one rejected token; concurrent requests share the new login."""\n'
+        '        """Refresh saved credentials once; concurrent callers share the login."""\n'
         '        async with self._auth_lock:\n'
         '            if self._closed:\n'
         '                raise CloudError("Cloud session is closed")\n'
@@ -377,6 +384,55 @@ _EMBEDDED_PROTOCOL = {
         '            await self._login_locked()\n'
         '\n'
         '    async def async_devices(self) -> list[CloudDevice]:\n'
+        '        """Commit one verified catalog; concurrent refreshes share its result."""\n'
+        '        generation = self._devices_generation\n'
+        '        async with self._devices_lock:\n'
+        '            if self._closed:\n'
+        '                raise CloudError("Cloud session is closed")\n'
+        '            if self._devices_generation != generation:\n'
+        '                return list(self.devices.values())\n'
+        '            previous = dict(self.devices)\n'
+        '            try:\n'
+        '                devices, complete = await self._device_snapshot(previous)\n'
+        '                missing = previous.keys() - devices.keys()\n'
+        '                if missing:\n'
+        '                    self.device_removal_checks = min(self.device_removal_checks + 1, 65535)\n'
+        '                    if not devices:\n'
+        '                        # Reloading HA restores some stale cloud sessions. Do\n'
+        '                        # that bounded recovery here before confirming an empty\n'
+        '                        # catalog, without treating network errors as bad auth.\n'
+        '                        self.empty_catalog_recoveries = min(self.empty_catalog_recoveries + 1, 65535)\n'
+        '                        await self._recover_login(self._auth_generation)\n'
+        '                    confirmed, complete = await self._device_snapshot({**previous, **devices})\n'
+        '                    # A camera absent only in the second reply is not a\n'
+        '                    # confirmed removal. Keep it until a subsequent refresh.\n'
+        '                    unconfirmed = (previous.keys() - confirmed.keys()) - missing\n'
+        '                    confirmed.update((uid, previous[uid]) for uid in unconfirmed)\n'
+        '                    devices = confirmed\n'
+        '                    complete = complete and not unconfirmed\n'
+        '                if self._closed:\n'
+        '                    raise CloudError("Cloud session is closed")\n'
+        '            except CloudError:\n'
+        '                self.device_list_complete = False\n'
+        '                raise\n'
+        '            self.devices = devices\n'
+        '            self.device_list_complete = bool(complete)\n'
+        '            self._devices_generation += 1\n'
+        '            return list(devices.values())\n'
+        '\n'
+        '    async def _device_snapshot(\n'
+        '        self, previous: dict[str, CloudDevice]\n'
+        '    ) -> tuple[dict[str, CloudDevice], bool]:\n'
+        '        response = await self._device_response()\n'
+        '        devices, complete = self._merge_devices(response, previous)\n'
+        '        result = response.get("result")\n'
+        '        self.last_device_list_result = result if type(result) is int and result in (0, 10005, 10007) else None\n'
+        '        if not complete:\n'
+        '            self.partial_device_list_responses = min(self.partial_device_list_responses + 1, 65535)\n'
+        '        return devices, complete\n'
+        '\n'
+        '    async def _device_response(self) -> dict[str, Any]:\n'
+        '        """Request a catalog, retaining the existing one through token recovery."""\n'
         '        for attempt in range(2):\n'
         '            await self._ensure_login()\n'
         '            generation = self._auth_generation\n'
@@ -394,32 +450,52 @@ _EMBEDDED_PROTOCOL = {
         '                await self._recover_login(generation)\n'
         '        if response.get("renew_token") is True:\n'
         '            await self._renew_token(generation)\n'
+        '        return response\n'
+        '\n'
+        '    @staticmethod\n'
+        '    def _merge_devices(\n'
+        '        response: dict[str, Any], previous: dict[str, CloudDevice]\n'
+        '    ) -> tuple[dict[str, CloudDevice], bool]:\n'
+        '        """Missing/partial sections update known cameras but cannot remove them."""\n'
         '        rows = response.get("data")\n'
         '        shared = response.get("data_share")\n'
-        '        if rows is None:\n'
-        '            rows = []\n'
-        '        if shared is None:\n'
-        '            shared = []\n'
-        '        if not isinstance(rows, list) or not isinstance(shared, list):\n'
+        '        partial = response.get("result") in (10005, 10007)\n'
+        '        if (\n'
+        '            rows is not None and not isinstance(rows, list)\n'
+        '            or shared is not None and not isinstance(shared, list)\n'
+        '        ):\n'
         '            raise CloudError("Cloud device list has an unsupported shape")\n'
+        '        if rows is None and shared is None and not (partial and previous):\n'
+        '            raise CloudError("Cloud device list did not contain a camera catalog")\n'
+        '        owned_complete = not partial and isinstance(rows, list)\n'
+        '        shared_complete = not partial and isinstance(shared, list)\n'
         '        normalized_shared = []\n'
-        '        for item in shared:\n'
+        '        for item in shared or []:\n'
         '            try:\n'
         '                normalized_shared.append(normalize_shared_device(item))\n'
         '            except (ValueError, TypeError, AttributeError):\n'
         '                # DeviceManager.parseShareDevice also drops malformed shares.\n'
+        '                # A dropped row cannot confirm that a known share was removed.\n'
+        '                shared_complete = False\n'
         '                continue\n'
-        '        devices: dict[str, CloudDevice] = {}\n'
-        '        for item in rows + normalized_shared:\n'
+        '        updates: dict[str, CloudDevice] = {}\n'
+        '        for item in rows or []:\n'
         '            if not isinstance(item, dict):\n'
         '                raise CloudError("Cloud device list contains an invalid device")\n'
         '            uid = item.get("device_id")\n'
-        '            if not isinstance(uid, int) or uid <= 0:\n'
+        '            if type(uid) is not int or uid <= 0:\n'
         '                raise CloudError("Cloud device list contains an invalid device ID")\n'
-        '            device = CloudDevice(str(uid), str(item.get("nickname") or f"V380 {uid}"), metadata=item)\n'
-        '            devices.setdefault(device.device_id, device)\n'
-        '        self.devices = devices\n'
-        '        return list(devices.values())\n'
+        '            metadata = {**item, "shared": False}\n'
+        '            updates[str(uid)] = CloudDevice(str(uid), str(item.get("nickname") or f"V380 {uid}"), metadata=metadata)\n'
+        '        for item in normalized_shared:\n'
+        '            uid = item["device_id"]\n'
+        '            updates.setdefault(str(uid), CloudDevice(str(uid), str(item.get("nickname") or f"V380 {uid}"), metadata=item))\n'
+        '        devices = {\n'
+        '            uid: device for uid, device in previous.items()\n'
+        '            if not (shared_complete if device.metadata.get("shared") is True else owned_complete)\n'
+        '        }\n'
+        '        devices.update(updates)\n'
+        '        return devices, owned_complete and shared_complete\n'
         '\n'
         '    async def _renew_token(self, generation: int | None = None) -> None:\n'
         '        async with self._auth_lock:\n'
@@ -451,6 +527,8 @@ _EMBEDDED_PROTOCOL = {
         '        self._closed = True\n'
         '        self.access_token = ""\n'
         '        self.devices.clear()\n'
+        '        self.device_list_complete = False\n'
+        '        self.last_device_list_result = None\n'
         '        self.account_metadata.clear()\n'
         '        self._password = ""\n'
     ),
@@ -1752,7 +1830,7 @@ _EMBEDDED_PROTOCOL = {
 
 _SELF_TEST_TS_B64 = 'R0AAMKYA////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////AACwDQABwQAAAAHwACqxBLJHUAAwoQD/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////AAKwEgABwQAA4QDwABvhAPAAFb1NVkdBADAHEAAAAAB+AAAAAeAAAICABSEAAQABAAAAAWdCwAraEJoQAAADABAAAAMDKPEiagAAAAFozg/IAAABBgX//0LcRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY1IC0gSC4yNjQvTVBFRy00IEFWQyBjb2RlYyAtIENvcHlsZWZ0IDIwMDMtMjAyNSAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQuaHRtbCAtIG9wdGlvRwEAEW5zOiBjYWJhYz0wIHJlZj0xIGRlYmxvY2s9MDowOjAgYW5hbHlzZT0wOjAgbWU9ZGlhIHN1Ym1lPTAgcHN5PTEgcHN5X3JkPTEuMDA6MC4wMCBtaXhlZF9yZWY9MCBtZV9yYW5nZT0xNiBjaHJvbWFfbWU9MSB0cmVsbGlzPTAgOHg4ZGN0PTAgY3FtPTAgZGVhZHpvbmU9MjEsMTEgZmFzdF9wc2tpcD0xIGNocm9tYV9xcF9vZmZHAQASc2V0PTAgdGhyZWFkcz0xIGxvb2thaGVhZF90aHJlYWRzPTEgc2xpY2VkX3RocmVhZHM9MCBucj0wIGRlY2ltYXRlPTEgaW50ZXJsYWNlZD0wIGJsdXJheV9jb21wYXQ9MCBjb25zdHJhaW5lZF9pbnRyYT0wIGJmcmFtZXM9MCB3ZWlnaHRwPTAga2V5aW50PTI1MCBrZXlpbnRfbWluPTI1IHNjZW5lY3V0PTAgaW50cmFfcmVmckcBADM9AP///////////////////////////////////////////////////////////////////////////////2VzaD0wIHJjPWNyZiBtYnRyZWU9MCBjcmY9MjMuMCBxY29tcD0wLjYwIHFwbWluPTAgcXBtYXg9NjkgcXBzdGVwPTQgaXBfcmF0aW89MS40MCBhcT0wAIAAAAFliIQ6EYoAAkqxwABEZjgACIzJycnXXXXXXXXXXXXgR0EAND4QAAAHCH4A/////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAARwhAAAAAUGaIDK8KRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUcAAQIo4AAgRYnxPifP5/P5/P5/P5/P5/P5/BHQQA1PhAAAA4QfgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQABOEEAAAABQZpAMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8EdBADY+EAAAFRh+AP////////////////////////////////////////////////////////////////////////8AAAHgAACAgAUhAAFUYQAAAAFBmmAyvCkUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFHAAECKOAAIEWJ8T4nz+fz+fz+fz+fz+fz+fwR0EANz4QAAAcIH4A/////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAAXCBAAAAAUGagDK8KRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUcAAQIo4AAgRYnxPifP5/P5/P5/P5/P5/P5/BHQQA4PhAAACMofgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQABjKEAAAABQZqgMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8EdBADk+EAAAKjB+AP////////////////////////////////////////////////////////////////////////8AAAHgAACAgAUhAAGowQAAAAFBmsAyvCkUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFHAAECKOAAIEWJ8T4nz+fz+fz+fz+fz+fz+fwR0EAOj4QAAAxOH4A/////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAAcThAAAAAUGa4DK8KRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUcAAQIo4AAgRYnxPifP5/P5/P5/P5/P5/P5/BHQQA7PhAAADhAfgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQAB4QEAAAABQZsAMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8EdBADw+EAAAP0h+AP////////////////////////////////////////////////////////////////////////8AAAHgAACAgAUhAAH9IQAAAAFBmyAyvCkUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFHAAECKOAAIEWJ8T4nz+fz+fz+fz+fz+fz+fwR0EAPT4QAABGUH4A/////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAAxlBAAAAAUGbQDK8KRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUcAAQIo4AAgRYnxPifP5/P5/P5/P5/P5/P5/BHQQA+PhAAAE1YfgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQADNWEAAAABQZtgMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8EdBAD+AEAAAVGB+AP////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////8AAAHgAACAgAUhAANRgQAAAAFBm4Ayo3FAAEFGOAAICscAAQFcT4nxPn8/n8/n8/n8/n8/n8/gR0EAMIYQAABbaH4A/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAA22hAAAAAUGboDKjcUAA1HAMcA4nxPifP5/P5/P5/P5/P5/P5/BHQQAxPhAAAGJwfgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQADicEAAAABQZvAMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8A=='
 _SELF_TEST_EXPECTED_FRAMES = 15
-_PROTOCOL_SOURCE_SHA256 = {'errors': '2cc1faa4bd1e208b2790d62198797a3573ab441df5467ff0d982cc5b1d50ec1e', 'shared': '23eeebbb8422839d0fb26328a302d48a90aa34e4dffe0b4153db26989e74794e', 'account': '2bb6921a4f7cb5286464599374f8677ab640b7f096e0b244cb180bf1c22fc7a7', 'live': '9293b57435f18cd381792b6fac087168806851c2d831a58f6dee50e226faccd6', 'mpegts': '5df2b4b70759cf278991d20c8ba3082b71eb3ac18d218350402dba4c81bfb59d', 'recordings': '3b30647f57ec2a1ff5756ee14d7a3f7ef1925c0b9a79d04882162e854daaa04f'}
+_PROTOCOL_SOURCE_SHA256 = {'errors': '2cc1faa4bd1e208b2790d62198797a3573ab441df5467ff0d982cc5b1d50ec1e', 'shared': '23eeebbb8422839d0fb26328a302d48a90aa34e4dffe0b4153db26989e74794e', 'account': '88b4d27bb79e3a2784541e287f54d26e3114497441dd9afc38cc5b55a4229825', 'live': '9293b57435f18cd381792b6fac087168806851c2d831a58f6dee50e226faccd6', 'mpegts': '5df2b4b70759cf278991d20c8ba3082b71eb3ac18d218350402dba4c81bfb59d', 'recordings': '3b30647f57ec2a1ff5756ee14d7a3f7ef1925c0b9a79d04882162e854daaa04f'}
 
 #!/usr/bin/env python3
 """V380 cloud and optional Home Assistant diagnostic (Python 3.11+).
@@ -1778,7 +1856,7 @@ import types
 from urllib.parse import quote, urljoin, urlsplit
 
 DEPENDENCIES = "aiohttp cryptography av certifi"
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 _MODULES = ("errors", "shared", "account", "live", "mpegts", "recordings")
 _PROTOCOL = None
 
@@ -2253,7 +2331,14 @@ async def run(args):
                 report["login"] = {"status": "pass"}
                 log("Cloud account login", report["login"])
                 devices = await client.async_devices()
-                report["discovery"] = {"status": "pass", "camera_count": len(devices)}
+                report["discovery"] = {
+                    "status": "pass", "camera_count": len(devices),
+                    "device_list_complete": client.device_list_complete,
+                    "last_device_list_result": client.last_device_list_result,
+                    "partial_device_list_responses": client.partial_device_list_responses,
+                    "device_removal_checks": client.device_removal_checks,
+                    "empty_catalog_recoveries": client.empty_catalog_recoveries,
+                }
                 log("Cloud camera discovery", report["discovery"])
                 selected = [(i, device) for i, device in enumerate(devices, 1) if args.camera is None or i == args.camera]
                 if not selected:

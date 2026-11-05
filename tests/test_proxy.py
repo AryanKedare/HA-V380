@@ -67,6 +67,8 @@ def _request(app, url, *, entry_id="entryfixture", device_id="1234", recording_i
 
 def _cloud_client():
     return SimpleNamespace(
+        devices={"1234": object()},
+        device_list_complete=True,
         register_media_task=Mock(),
         unregister_media_task=Mock(),
         async_recording_download=AsyncMock(

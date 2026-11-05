@@ -23,7 +23,7 @@ import types
 from urllib.parse import quote, urljoin, urlsplit
 
 DEPENDENCIES = "aiohttp cryptography av certifi"
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 _MODULES = ("errors", "shared", "account", "live", "mpegts", "recordings")
 _PROTOCOL = None
 
@@ -498,7 +498,14 @@ async def run(args):
                 report["login"] = {"status": "pass"}
                 log("Cloud account login", report["login"])
                 devices = await client.async_devices()
-                report["discovery"] = {"status": "pass", "camera_count": len(devices)}
+                report["discovery"] = {
+                    "status": "pass", "camera_count": len(devices),
+                    "device_list_complete": client.device_list_complete,
+                    "last_device_list_result": client.last_device_list_result,
+                    "partial_device_list_responses": client.partial_device_list_responses,
+                    "device_removal_checks": client.device_removal_checks,
+                    "empty_catalog_recoveries": client.empty_catalog_recoveries,
+                }
                 log("Cloud camera discovery", report["discovery"])
                 selected = [(i, device) for i, device in enumerate(devices, 1) if args.camera is None or i == args.camera]
                 if not selected:

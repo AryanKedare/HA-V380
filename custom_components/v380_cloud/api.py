@@ -15,6 +15,14 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 
+class CameraUnavailableError(CloudError):
+    """The camera is absent from the current account device list."""
+
+
+class PlaybackNotReadyError(CloudError):
+    """The local Home Assistant media proxy has not been bound yet."""
+
+
 class V380CloudClient(AccountClient):
     def __init__(
         self, session: aiohttp.ClientSession, username: str, password: str,
@@ -27,6 +35,38 @@ class V380CloudClient(AccountClient):
         self._live_sessions: set[ForwardedCloudLiveClient] = set()
         self._media_tasks: set[asyncio.Task[Any]] = set()
         self._recordings_client: Any = None
+        self._account_auth_failed = False
+        self.live_stream_failures = 0
+        self.last_live_failure: dict[str, Any] = {}
+
+    @property
+    def cached_devices_available(self) -> bool:
+        """Allow known devices through transient metadata/session refresh errors."""
+        return bool(self.account_id) and not (
+            self._closed or self._credentials_rejected or self._account_auth_failed
+        )
+
+    async def async_devices(self) -> list[CloudDevice]:
+        try:
+            devices = await super().async_devices()
+        except AuthError:
+            self._account_auth_failed = True
+            raise
+        self._account_auth_failed = False
+        return devices
+
+    def record_live_failure(self, error: CloudError, *, phase: str) -> dict[str, Any]:
+        """Store only revalidated enums/numbers, never exception text or URLs."""
+        fields = {key: error.diagnostic.get(key) for key in (
+            "stage", "code", "error_id", "protocol_version", "packet_type",
+            "relay_command", "relay_status",
+        )}
+        fields["reason"] = error.diagnostic.get("detail")
+        safe = dict(CloudError(**fields).diagnostic)
+        safe["phase"] = phase if phase in ("startup", "stream") else "unknown"
+        self.live_stream_failures = min(self.live_stream_failures + 1, 65535)
+        self.last_live_failure = safe
+        return dict(safe)
 
     def bind_home_assistant(self, hass: HomeAssistant, entry_id: str) -> None:
         """Keep HA-specific URL signing outside the protocol implementation."""
@@ -38,11 +78,11 @@ class V380CloudClient(AccountClient):
         try:
             return self.devices[device_id]
         except KeyError:
-            raise CloudError("The camera is no longer available to this account") from None
+            raise CameraUnavailableError("The camera is no longer available to this account") from None
 
     def _source(self, kind: str, device_id: str, recording_id: str = "") -> str:
         if self._hass is None:
-            raise CloudError("The Home Assistant media proxy has not been initialized")
+            raise PlaybackNotReadyError("The Home Assistant media proxy has not been initialized")
         from .proxy import signed_media_url
         return signed_media_url(self._hass, self._entry_id, kind, device_id, recording_id)
 

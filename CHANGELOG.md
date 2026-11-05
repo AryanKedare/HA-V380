@@ -1,5 +1,67 @@
 # Changes
 
+## 0.1.7 — 5 November 2026
+
+- Renew the public reconnect source without forcing active video to exit. A
+  0.1.6 replay on Core 2026.11.0 reproduces the missing-HLS ValueError when
+  renewal interrupts worker backoff and queued cleanup removes the output.
+- Retire idle/lost-output objects before new HLS viewers attach. Join preloaded
+  workers on retirement/unload without changing shared camera preferences.
+- Keep cached cameras available through transient metadata errors while honoring
+  auth rejection, removal, explicit offline state and failed video.
+- Bound startup to 25 seconds within Core's 30-second reader budget; cancel
+  abandoned viewers before another upstream session can overlap. Normal viewer
+  closes are not recorded as relay failures. Report sanitized failure details.
+- Target Core 2026.11.0 and Python 3.14.2+; the current 3.14.10 run completes
+  cleanly with 163 tests and 14 subtests passing. Seven real-HA pipeline tests
+  exercise local HTTP, Core's worker, HLS and independent fragment decoding.
+
+Camera/network/browser longevity remains to be verified. The portable cloud
+transport and standalone tester 1.4.0 are unchanged. The historical 2026.10.2
+shutdown issue did not occur in this current run; its original cause is unknown.
+
+## 0.1.6 — 5 November 2026
+
+- Preserve known cameras when a device-list response is partial, a catalog
+  section is missing/null, or a shared row cannot be decoded. Authoritative
+  owned/shared sections are handled independently; omissions are not empty lists.
+- Confirm an apparent removal with one additional catalog request. If all known
+  cameras disappear, refresh the saved cloud session once before confirmation.
+  A confirmed removal is honored; failures cannot erase the last committed list.
+- Serialize catalog commits and let concurrent refresh callers share the result.
+  Use the client's current snapshot for media-route ownership checks, avoiding
+  a 404 from an older coordinator snapshot. Incomplete unknown lookups are 503.
+- Add aggregate catalog completeness, result and recovery counters to integration
+  diagnostics. Tester 1.4.0 embeds the new account code and reports these fields.
+- Pin the installer to 0.1.6. Offline checks: 20 catalog, 24 source/route,
+  20 auth/relay recovery, six forwarding, four shared parsing, 12 standalone
+  report and eight installer checks pass. The 15-frame self-test also passes.
+
+The user reports a missing-camera error and playback restored by reloading the
+integration. Partial-reply cache erasure is reproduced in fixtures; the actual
+failing vendor response was not captured. Real HA longevity remains unverified.
+
+## 0.1.5 — 4 November 2026
+
+- Keep V380 cameras on Home Assistant's HLS stream pipeline by declining
+  automatically selected WebRTC providers. The local authenticated MPEG-TS URL
+  requires its source lifecycle to be managed by the HA stream path; native
+  WebRTC is not implemented. Streaming and stream-derived stills remain enabled.
+- Distinguish an absent camera, an uninitialized local playback proxy, and
+  unreadable camera credentials from generic cloud response failures. Preserve
+  genuine account reauthentication and bounded renewal retries.
+- Log only bounded diagnostic fields for source failures, never exception text,
+  credentials, URLs or server responses. Pin the installer to 0.1.5.
+- Offline validation: 20 source/route lifecycle checks, 20 auth/relay recovery
+  checks and eight installer checks pass. A separate contract check runs the
+  exact Core 2026.10.4 provider/capability methods with a synthetic backend.
+
+The user reports Core 2026.10.4 playback stops with a WebRTC source-preparation
+error after 0.1.4 worked initially. This change uses HLS and improves diagnosis;
+it does not establish that a separate cloud or metadata failure is resolved.
+Installed HA/browser playback still needs verification. The portable protocol
+and standalone tester 1.3.0 are unchanged.
+
 ## 0.1.4 — 4 November 2026
 
 - Fix signed Home Assistant live URL renewal: repeated source requests now
