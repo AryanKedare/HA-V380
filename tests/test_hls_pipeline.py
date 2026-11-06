@@ -123,7 +123,7 @@ def test_real_http_worker_produces_decodable_hls_and_renews_without_reconnect(tm
     async def run():
         frames = video_frames()
         opened, closed = [], []
-        async def source(device_id):
+        async def source(device_id, **kwargs):
             opened.append(True)
             try:
                 index = 0
@@ -160,7 +160,7 @@ def test_real_http_worker_produces_decodable_hls_and_renews_without_reconnect(tm
 
 
 def test_renewal_during_core_retry_keeps_hls_output(tmp_path):
-    async def source(device_id):
+    async def source(device_id, **kwargs):
         if False: yield None
     async def run():
         attempts = []
@@ -185,7 +185,7 @@ def test_renewal_during_core_retry_keeps_hls_output(tmp_path):
 
 def test_idle_core_stream_is_replaced_before_new_endpoint(tmp_path):
     frames = video_frames()
-    async def source(device_id):
+    async def source(device_id, **kwargs):
         while True:
             yield frames[0]
             await asyncio.sleep(0.05)
@@ -203,7 +203,8 @@ def test_idle_core_stream_is_replaced_before_new_endpoint(tmp_path):
 def test_slow_start_returns_gateway_error_before_reader_timeout(tmp_path):
     async def run():
         entered, closed = asyncio.Event(), asyncio.Event()
-        async def source(device_id):
+        async def source(device_id, **kwargs):
+            kwargs['progress'].update(stage='relay_handshake', relays_tried=2, keyframes=0)
             entered.set()
             try:
                 await asyncio.Event().wait()
@@ -219,13 +220,16 @@ def test_slow_start_returns_gateway_error_before_reader_timeout(tmp_path):
             assert not env.client._media_tasks
             assert env.client.last_live_failure['phase'] == 'startup'
             assert env.client.last_live_failure['detail'] == 'network_timeout'
+            assert env.client.last_live_failure['stage'] == 'relay_handshake'
+            assert env.client.last_live_failure['relays_tried'] == 2
+            assert env.client._live_startup_failures['7'] == 1
     asyncio.run(run())
 
 
 def test_client_disconnect_cancels_session_before_first_frame(tmp_path):
     async def run():
         entered, closed = asyncio.Event(), asyncio.Event()
-        async def source(device_id):
+        async def source(device_id, **kwargs):
             entered.set()
             try:
                 await asyncio.Event().wait()
@@ -247,7 +251,7 @@ def test_client_disconnect_cancels_session_before_first_frame(tmp_path):
 
 def test_relay_failure_after_headers_records_only_sanitized_reason(tmp_path, caplog):
     frames = video_frames()
-    async def source(device_id):
+    async def source(device_id, **kwargs):
         yield frames[0]
         raise CloudError('private-url-and-password', stage='media_stream', reason='connection_failed', code=100)
     async def run():
@@ -266,7 +270,7 @@ def test_viewer_close_during_video_is_not_recorded_as_relay_failure(tmp_path, ca
     frames = video_frames()
     async def run():
         closed = asyncio.Event()
-        async def source(device_id):
+        async def source(device_id, **kwargs):
             try:
                 while True:
                     yield frames[0]

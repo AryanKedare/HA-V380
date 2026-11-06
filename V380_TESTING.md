@@ -1,6 +1,6 @@
 # Test V380 cloud video and the installed Home Assistant integration
 
-Download **v380_full_test.py** (tester version **1.4.0**). It is a standalone script; the integration ZIP
+Download **v380_full_test.py** (tester version **1.5.0**). It is a standalone script; the integration ZIP
 is not needed on the computer running it. Use Python3.11 or newer and an
 interactive terminal. Passwords and the optional Home Assistant token are
 prompted locally, without echo or command-line arguments.
@@ -42,7 +42,7 @@ This skips cloud-recording requests in both direct-cloud and Home Assistant
 checks. The report marks recordings `not_requested`; a live-only PASS covers
 only login, discovery and the requested live samples.
 
-Version 1.4.0 uses the mode-1022 forwarding path confirmed on one AWT3710D camera.
+Version 1.5.0 uses the mode-1022 forwarding path confirmed on one AWT3710D camera.
 It automatically reconnects temporary live transport failures with bounded retries
 and keyframe resumption. Successful live reports include `live_reconnects`; zero
 means the requested sample did not exercise recovery. Account token expiry is

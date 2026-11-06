@@ -90,13 +90,15 @@ class V380LiveView(HomeAssistantView):
         hass = request.app[KEY_HASS]
         client = _client(hass, entry_id, device_id)
         client.register_media_task()
-        frames = client.async_live_frames(device_id)
+        progress = {}
+        frames = client.async_live_frames(device_id, progress=progress)
         response = web.StreamResponse(headers={"Content-Type": "video/mp2t", "Cache-Control": "no-store"})
         producer = asyncio.create_task(_write_live(request, frames, response))
         disconnected = asyncio.create_task(_wait_for_disconnect(request))
 
         def record(error: CloudError) -> None:
-            diagnostic = client.record_live_failure(error, phase="stream" if response.prepared else "startup")
+            diagnostic = client.record_live_failure(error, phase="stream" if response.prepared else "startup",
+                                                     progress=progress, device_id=device_id)
             _LOGGER.warning("V380 live stream failed: %s", diagnostic)
 
         try:
@@ -117,7 +119,8 @@ class V380LiveView(HomeAssistantView):
             pass  # HA/browser stopped watching; this is not a relay failure.
         except (CloudError, ClientError, TimeoutError, StopAsyncIteration, ValueError) as err:
             detail = err if isinstance(err, CloudError) else CloudError(
-                stage="media_stream", reason="network_timeout" if isinstance(err, TimeoutError) else "session_failed")
+                stage=progress.get('stage', 'media_stream'),
+                reason="network_timeout" if isinstance(err, TimeoutError) else "session_failed")
             record(detail)
             if not response.prepared:
                 raise web.HTTPBadGateway(text="V380 cloud video could not start") from None

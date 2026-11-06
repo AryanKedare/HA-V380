@@ -5,7 +5,7 @@
 # Also check installed HA: python3 v380_full_test.py --ha-url http://homeassistant.local:8123
 # The audited protocol modules below are embedded as readable source literals.
 # They are loaded from this file only; no remote code is downloaded or executed.
-# Source: V380 Cloud 0.1.6; protocol references are embedded below.
+# Source: V380 Cloud 0.1.8; protocol references are embedded below.
 """Test V380 cloud login, live video decoding and recordings; optionally check Home Assistant.
 Credentials are prompted locally. The report excludes account/camera IDs, secrets and URLs.
 Requires Python3.11+ and aiohttp, cryptography, av, certifi.
@@ -22,7 +22,7 @@ _EMBEDDED_PROTOCOL = {
         '    _STAGES = frozenset({\n'
         '        "device_credentials", "dispatcher_connect", "dispatcher_response",\n'
         '        "device_login_connect", "device_login_response", "relay_connect",\n'
-        '        "relay_handshake", "media_stream",\n'
+        '        "relay_handshake", "media_stream", "account_refresh",\n'
         '    })\n'
         '    _REASONS = frozenset({\n'
         '        "dns_failed", "connection_failed", "network_timeout", "incomplete_response",\n'
@@ -43,9 +43,9 @@ _EMBEDDED_PROTOCOL = {
         '        # Messages, endpoints, handles, sessions and device IDs never do.\n'
         '        self.diagnostic = {}\n'
         '        self.relay_attempts: list[dict] = []\n'
-        '        if stage in self._STAGES:\n'
+        '        if isinstance(stage, str) and stage in self._STAGES:\n'
         '            self.diagnostic["stage"] = stage\n'
-        '        if reason in self._REASONS:\n'
+        '        if isinstance(reason, str) and reason in self._REASONS:\n'
         '            self.diagnostic["detail"] = reason\n'
         '        for name, value, low, high in (\n'
         '            ("code", code, -65535, 65535),\n'
@@ -548,7 +548,7 @@ _EMBEDDED_PROTOCOL = {
         'import base64\n'
         'from collections.abc import AsyncIterator, Mapping\n'
         'from contextlib import suppress\n'
-        'from dataclasses import dataclass\n'
+        'from dataclasses import dataclass, field\n'
         'import json\n'
         'import secrets\n'
         'import socket\n'
@@ -732,6 +732,44 @@ _EMBEDDED_PROTOCOL = {
         '        return Frame(payload, codec, timestamp, keyframe, sequence)\n'
         '\n'
         '\n'
+        '@dataclass(slots=True)\n'
+        'class RelayState:\n'
+        '    """Private per-camera routing hints; never put endpoint values in reports."""\n'
+        '\n'
+        '    relays: list[str] = field(default_factory=list)\n'
+        "    discovered_at: float = float('-inf')\n"
+        '    preferred: str | None = None\n'
+        "    succeeded_at: float = float('-inf')\n"
+        '    attempted: dict[str, float] = field(default_factory=dict)\n'
+        '    failed: dict[str, float] = field(default_factory=dict)\n'
+        '    cache_seconds: float = 900.0\n'
+        '    cooldown_seconds: float = 60.0\n'
+        '\n'
+        '    def order(self, relays: list[str], now: float) -> list[str]:\n'
+        '        def priority(host):\n'
+        "            blocked = now - self.failed.get(host, float('-inf')) < self.cooldown_seconds\n"
+        '            preferred = host == self.preferred and now - self.succeeded_at < self.cache_seconds\n'
+        "            return blocked, not (preferred and not blocked), self.attempted.get(host, float('-inf'))\n"
+        '        return sorted(dict.fromkeys(relays), key=priority)\n'
+        '\n'
+        '    def cached(self, now: float) -> list[str]:\n'
+        '        relays = list(self.relays) if now - self.discovered_at < self.cache_seconds else []\n'
+        '        if self.preferred and now - self.succeeded_at < self.cache_seconds and self.preferred not in relays:\n'
+        '            relays.insert(0, self.preferred)\n'
+        '        return self.order(relays, now)\n'
+        '\n'
+        '    def remember(self, relays: list[str], now: float) -> None:\n'
+        '        self.relays = list(dict.fromkeys(relays))[:14]\n'
+        '        self.discovered_at = now\n'
+        '        allowed = set(self.relays) | ({self.preferred} if self.preferred else set())\n'
+        '        self.attempted = {key: value for key, value in self.attempted.items() if key in allowed}\n'
+        '        self.failed = {key: value for key, value in self.failed.items() if key in allowed}\n'
+        '\n'
+        '    def success(self, host: str, now: float) -> None:\n'
+        '        self.preferred, self.succeeded_at = host, now\n'
+        '        self.failed.pop(host, None)\n'
+        '\n'
+        '\n'
         'class CloudLiveClient:\n'
         '    """A one-viewer cloud session; the caller consumes and closes async_frames."""\n'
         '\n'
@@ -755,6 +793,8 @@ _EMBEDDED_PROTOCOL = {
         '        relay_port: int = 8800,\n'
         '        timeout: float = 15,\n'
         '        audio: bool = True,\n'
+        '        relay_state: RelayState | None = None,\n'
+        '        progress: dict[str, Any] | None = None,\n'
         '    ) -> None:\n'
         '        self.metadata = dict(metadata)\n'
         '        self.device_id = int(metadata.get("device_id", metadata.get("id", 0)))\n'
@@ -774,6 +814,11 @@ _EMBEDDED_PROTOCOL = {
         '        self.relay_port = relay_port\n'
         '        self.timeout = timeout\n'
         '        self.audio = audio\n'
+        '        self.relay_state = relay_state if relay_state is not None else RelayState()\n'
+        '        self.progress = progress if progress is not None else {}\n'
+        "        for key in ('relays_tried', 'media_headers', 'video_frames', 'keyframes', 'transport_reconnects'):\n"
+        '            self.progress[key] = 0\n'
+        "        self.progress['stage'] = 'dispatcher_connect'\n"
         '        self.login_protocol_version: int | None = None\n'
         '        self.reconnect_count = 0\n'
         '        self._last_relay: str | None = None\n'
@@ -796,9 +841,11 @@ _EMBEDDED_PROTOCOL = {
         '        """Ask the app\'s dispatcher for cloud relays; never probe the LAN."""\n'
         '        writer = None\n'
         '        stage = "dispatcher_connect"\n'
+        "        self.progress['stage'] = stage\n"
         '        try:\n'
         '            reader, writer = await self._open(self.dispatch_server, self.dispatch_port)\n'
         '            stage = "dispatcher_response"\n'
+        "            self.progress['stage'] = stage\n"
         '            random_key = self._random_key()\n'
         '            writer.write(dispatch_request(self.device_id, self.zone, random_key))\n'
         '            await writer.drain()\n'
@@ -835,9 +882,11 @@ _EMBEDDED_PROTOCOL = {
         '    async def _login(self, host: str) -> dict[str, Any]:\n'
         '        writer = None\n'
         '        stage = "device_login_connect"\n'
+        "        self.progress['stage'] = stage\n"
         '        try:\n'
         '            reader, writer = await self._open(host, self.login_port)\n'
         '            stage = "device_login_response"\n'
+        "            self.progress['stage'] = stage\n"
         '            random_key = self._random_key()\n'
         '            request_id = secrets.randbelow(99999999) + 100\n'
         '            payload = {\n'
@@ -897,10 +946,12 @@ _EMBEDDED_PROTOCOL = {
         '\n'
         '    async def _start_relay(self, host: str, login: Mapping[str, Any]) -> tuple[asyncio.StreamReader, int]:\n'
         '        stage = "relay_connect"\n'
+        "        self.progress['stage'] = stage\n"
         '        try:\n'
         '            reader, writer = await self._open(host, self.relay_port)\n'
         '            self._writer = writer\n'
         '            stage = "relay_handshake"\n'
+        "            self.progress['stage'] = stage\n"
         '            handle, session = int(login["handle"]), int(login["session"])\n'
         '            writer.write(relay_request(self.device_id, self.domain, self.camera_port, handle, session, audio=self.audio))\n'
         '            await writer.drain()\n'
@@ -932,7 +983,7 @@ _EMBEDDED_PROTOCOL = {
         '                    except StopAsyncIteration:\n'
         '                        return\n'
         '                    except TimeoutError as err:\n'
-        '                        raise CloudError("V380 live video stopped arriving", stage="media_stream",\n'
+        '                        raise CloudError("V380 live video stopped arriving", stage=self.progress.get(\'stage\', \'media_stream\'),\n'
         '                                         reason="network_timeout") from err\n'
         '                    video = frame.codec in ("h264", "hevc", "h265")\n'
         '                    if needs_keyframe:\n'
@@ -963,6 +1014,7 @@ _EMBEDDED_PROTOCOL = {
         '                delay = self.reconnect_delays[failures]\n'
         '                failures += 1\n'
         '                self.reconnect_count += 1\n'
+        "                self.progress['transport_reconnects'] = self.reconnect_count\n"
         '            finally:\n'
         '                await session.aclose()\n'
         '            try:\n'
@@ -973,21 +1025,51 @@ _EMBEDDED_PROTOCOL = {
         '\n'
         '    async def _async_session_frames(self) -> AsyncIterator[Frame]:\n'
         '        """Yield frames from one authenticated relay session."""\n'
-        '        relays = await self.async_relays()\n'
-        '        if self._last_relay in relays:\n'
-        '            relays = [self._last_relay] + [host for host in relays if host != self._last_relay]\n'
+        '        loop = asyncio.get_running_loop()\n'
+        '        cached = self.relay_state.cached(loop.time())\n'
+        '        relays = cached[:1]\n'
+        '        using_cache = bool(relays)\n'
+        '        attempted: set[str] = set()\n'
+        '        dispatched = False\n'
         '        last_error: Exception | None = None\n'
         '        attempts: list[dict[str, Any]] = []\n'
-        '        for host in relays:\n'
+        '        while True:\n'
+        '            if not relays:\n'
+        '                if dispatched:\n'
+        '                    break\n'
+        '                dispatched = True\n'
+        "                self.progress['stage'] = 'dispatcher_connect'\n"
+        '                try:\n'
+        '                    discovered = await self.async_relays()\n'
+        '                except CloudError as err:\n'
+        '                    last_error = err\n'
+        '                    relays = [host for host in self.relay_state.cached(loop.time()) if host not in attempted]\n'
+        '                    using_cache = True\n'
+        '                    if not relays:\n'
+        '                        raise\n'
+        '                else:\n'
+        '                    self.relay_state.remember(discovered, loop.time())\n'
+        '                    relays = [host for host in self.relay_state.order(discovered, loop.time()) if host not in attempted]\n'
+        '                    using_cache = False\n'
+        '                if not relays:\n'
+        '                    break\n'
+        '            host = relays.pop(0)\n'
+        '            attempted.add(host)\n'
+        '            self.relay_state.attempted[host] = loop.time()\n'
+        "            self.progress['relays_tried'] = min(self.progress['relays_tried'] + 1, 65535)\n"
+        "            self.progress['cached_relay_used'] = using_cache\n"
         '            emitted = False\n'
+        '            video_started = False\n'
         '            self.login_protocol_version = None\n'
         '            stage = "device_login_connect"\n'
+        "            self.progress['stage'] = stage\n"
         '            try:\n'
         '                login = await self._login(host)\n'
         '                login_version = int(login.get("version", 0))\n'
         '                if 0 <= login_version <= 255:\n'
         '                    self.login_protocol_version = login_version\n'
         '                stage = "relay_connect"\n'
+        "                self.progress['stage'] = stage\n"
         '                reader, media_version = await self._start_relay(host, login)\n'
         '                writer = self._writer\n'
         '                assert writer is not None\n'
@@ -995,10 +1077,12 @@ _EMBEDDED_PROTOCOL = {
         '                decoder = FrameDecoder(handle, int(login.get("version", 31)), media_version,\n'
         '                                       fragment_limit=self.fragment_limit)\n'
         '                stage = "media_stream"\n'
+        "                self.progress['stage'] = stage\n"
         '                received_fragments = 0\n'
         '                last_ack = asyncio.get_running_loop().time()\n'
         '                while True:\n'
         '                    header = await self._read(reader, 12)\n'
+        "                    self.progress['media_headers'] = min(self.progress['media_headers'] + 1, 65535)\n"
         '                    marker = header[0]\n'
         '                    if marker == 0x7F:\n'
         '                        length = struct.unpack_from("<H", header, 7)[0]\n'
@@ -1014,8 +1098,13 @@ _EMBEDDED_PROTOCOL = {
         '                            await writer.drain()\n'
         '                            last_ack = now\n'
         '                        if frame is not None:\n'
+        "                            if frame.codec in ('h264', 'hevc', 'h265'):\n"
+        "                                self.progress['video_frames'] = min(self.progress['video_frames'] + 1, 65535)\n"
         '                            if frame.keyframe and frame.codec in ("h264", "hevc", "h265"):\n'
         '                                self._last_relay = host\n'
+        '                                video_started = True\n'
+        "                                self.progress['keyframes'] = min(self.progress['keyframes'] + 1, 65535)\n"
+        '                                self.relay_state.success(host, loop.time())\n'
         '                            emitted = True\n'
         '                            yield frame\n'
         '                    elif marker == 0x2F:\n'
@@ -1033,11 +1122,18 @@ _EMBEDDED_PROTOCOL = {
         '                    elif marker not in (0x3F, 0x4F, 0x5F, 0x6F):\n'
         '                        raise UnsupportedError("The cloud relay sent an unsupported media packet", stage=stage,\n'
         '                                               reason="packet_type_unsupported", packet_type=marker)\n'
+        '            except asyncio.CancelledError:\n'
+        '                # An outer startup deadline must advance the next attempt,\n'
+        '                # rather than restarting from the same slow first relay.\n'
+        '                if not video_started:\n'
+        '                    self.relay_state.failed[host] = loop.time()\n'
+        '                raise\n'
         '            except AuthError:\n'
         '                raise\n'
         '            except UnsupportedError:\n'
         '                raise\n'
         '            except (CloudError, OSError, TimeoutError, asyncio.IncompleteReadError, ValueError, TypeError) as err:\n'
+        '                self.relay_state.failed[host] = loop.time()\n'
         '                detail = self._transport_error(err, stage)\n'
         '                if self.login_protocol_version is not None:\n'
         '                    detail.diagnostic["login_protocol_version"] = self.login_protocol_version\n'
@@ -1109,9 +1205,11 @@ _EMBEDDED_PROTOCOL = {
         '    async def _binary_login(self, host: str, username: str, *, padded: bool) -> dict[str, Any]:\n'
         '        writer = None\n'
         '        stage = "device_login_connect"\n'
+        "        self.progress['stage'] = stage\n"
         '        try:\n'
         '            reader, writer = await self._open(host, self.relay_port)\n'
         '            stage = "device_login_response"\n'
+        "            self.progress['stage'] = stage\n"
         '            writer.write(forwarded_login_request(self.device_id, self.domain, self.camera_port,\n'
         '                username, self._password, self._random_key(), padded=padded))\n'
         '            await writer.drain()\n'
@@ -1162,10 +1260,12 @@ _EMBEDDED_PROTOCOL = {
         '\n'
         '    async def _start_relay(self, host: str, login: Mapping[str, Any]) -> tuple[asyncio.StreamReader, int]:\n'
         '        stage = "relay_connect"\n'
+        "        self.progress['stage'] = stage\n"
         '        try:\n'
         '            reader, writer = await self._open(host, self.relay_port)\n'
         '            self._writer = writer\n'
         '            stage = "relay_handshake"\n'
+        "            self.progress['stage'] = stage\n"
         "            # Forwarding mode 1022 routes the camera's native stream protocol.\n"
         '            packet = bytearray(256)\n'
         '            struct.pack_into("<II", packet, 0, 301, 1022)\n'
@@ -1830,7 +1930,7 @@ _EMBEDDED_PROTOCOL = {
 
 _SELF_TEST_TS_B64 = 'R0AAMKYA////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////AACwDQABwQAAAAHwACqxBLJHUAAwoQD/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////AAKwEgABwQAA4QDwABvhAPAAFb1NVkdBADAHEAAAAAB+AAAAAeAAAICABSEAAQABAAAAAWdCwAraEJoQAAADABAAAAMDKPEiagAAAAFozg/IAAABBgX//0LcRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY1IC0gSC4yNjQvTVBFRy00IEFWQyBjb2RlYyAtIENvcHlsZWZ0IDIwMDMtMjAyNSAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQuaHRtbCAtIG9wdGlvRwEAEW5zOiBjYWJhYz0wIHJlZj0xIGRlYmxvY2s9MDowOjAgYW5hbHlzZT0wOjAgbWU9ZGlhIHN1Ym1lPTAgcHN5PTEgcHN5X3JkPTEuMDA6MC4wMCBtaXhlZF9yZWY9MCBtZV9yYW5nZT0xNiBjaHJvbWFfbWU9MSB0cmVsbGlzPTAgOHg4ZGN0PTAgY3FtPTAgZGVhZHpvbmU9MjEsMTEgZmFzdF9wc2tpcD0xIGNocm9tYV9xcF9vZmZHAQASc2V0PTAgdGhyZWFkcz0xIGxvb2thaGVhZF90aHJlYWRzPTEgc2xpY2VkX3RocmVhZHM9MCBucj0wIGRlY2ltYXRlPTEgaW50ZXJsYWNlZD0wIGJsdXJheV9jb21wYXQ9MCBjb25zdHJhaW5lZF9pbnRyYT0wIGJmcmFtZXM9MCB3ZWlnaHRwPTAga2V5aW50PTI1MCBrZXlpbnRfbWluPTI1IHNjZW5lY3V0PTAgaW50cmFfcmVmckcBADM9AP///////////////////////////////////////////////////////////////////////////////2VzaD0wIHJjPWNyZiBtYnRyZWU9MCBjcmY9MjMuMCBxY29tcD0wLjYwIHFwbWluPTAgcXBtYXg9NjkgcXBzdGVwPTQgaXBfcmF0aW89MS40MCBhcT0wAIAAAAFliIQ6EYoAAkqxwABEZjgACIzJycnXXXXXXXXXXXXgR0EAND4QAAAHCH4A/////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAARwhAAAAAUGaIDK8KRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUcAAQIo4AAgRYnxPifP5/P5/P5/P5/P5/P5/BHQQA1PhAAAA4QfgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQABOEEAAAABQZpAMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8EdBADY+EAAAFRh+AP////////////////////////////////////////////////////////////////////////8AAAHgAACAgAUhAAFUYQAAAAFBmmAyvCkUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFHAAECKOAAIEWJ8T4nz+fz+fz+fz+fz+fz+fwR0EANz4QAAAcIH4A/////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAAXCBAAAAAUGagDK8KRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUcAAQIo4AAgRYnxPifP5/P5/P5/P5/P5/P5/BHQQA4PhAAACMofgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQABjKEAAAABQZqgMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8EdBADk+EAAAKjB+AP////////////////////////////////////////////////////////////////////////8AAAHgAACAgAUhAAGowQAAAAFBmsAyvCkUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFHAAECKOAAIEWJ8T4nz+fz+fz+fz+fz+fz+fwR0EAOj4QAAAxOH4A/////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAAcThAAAAAUGa4DK8KRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUcAAQIo4AAgRYnxPifP5/P5/P5/P5/P5/P5/BHQQA7PhAAADhAfgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQAB4QEAAAABQZsAMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8EdBADw+EAAAP0h+AP////////////////////////////////////////////////////////////////////////8AAAHgAACAgAUhAAH9IQAAAAFBmyAyvCkUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFHAAECKOAAIEWJ8T4nz+fz+fz+fz+fz+fz+fwR0EAPT4QAABGUH4A/////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAAxlBAAAAAUGbQDK8KRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUcAAQIo4AAgRYnxPifP5/P5/P5/P5/P5/P5/BHQQA+PhAAAE1YfgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQADNWEAAAABQZtgMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8EdBAD+AEAAAVGB+AP////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////8AAAHgAACAgAUhAANRgQAAAAFBm4Ayo3FAAEFGOAAICscAAQFcT4nxPn8/n8/n8/n8/n8/n8/gR0EAMIYQAABbaH4A/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////wAAAeAAAICABSEAA22hAAAAAUGboDKjcUAA1HAMcA4nxPifP5/P5/P5/P5/P5/P5/BHQQAxPhAAAGJwfgD/////////////////////////////////////////////////////////////////////////AAAB4AAAgIAFIQADicEAAAABQZvAMrwpFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRQABACigACAFFAAEAKKAAIAUUAAQAooAAgBRwABAijgACBFifE+J8/n8/n8/n8/n8/n8/n8A=='
 _SELF_TEST_EXPECTED_FRAMES = 15
-_PROTOCOL_SOURCE_SHA256 = {'errors': '2cc1faa4bd1e208b2790d62198797a3573ab441df5467ff0d982cc5b1d50ec1e', 'shared': '23eeebbb8422839d0fb26328a302d48a90aa34e4dffe0b4153db26989e74794e', 'account': '88b4d27bb79e3a2784541e287f54d26e3114497441dd9afc38cc5b55a4229825', 'live': '9293b57435f18cd381792b6fac087168806851c2d831a58f6dee50e226faccd6', 'mpegts': '5df2b4b70759cf278991d20c8ba3082b71eb3ac18d218350402dba4c81bfb59d', 'recordings': '3b30647f57ec2a1ff5756ee14d7a3f7ef1925c0b9a79d04882162e854daaa04f'}
+_PROTOCOL_SOURCE_SHA256 = {'errors': 'b77adb9f278afe5355521934f5264eaf73cf943444654ed3fc9c8faf18ebeb47', 'shared': '23eeebbb8422839d0fb26328a302d48a90aa34e4dffe0b4153db26989e74794e', 'account': '88b4d27bb79e3a2784541e287f54d26e3114497441dd9afc38cc5b55a4229825', 'live': '8a9a2264c1dc7c2659c62a49cd317c34161f46f2accea35b05e1d8feae96ae46', 'mpegts': '5df2b4b70759cf278991d20c8ba3082b71eb3ac18d218350402dba4c81bfb59d', 'recordings': '3b30647f57ec2a1ff5756ee14d7a3f7ef1925c0b9a79d04882162e854daaa04f'}
 
 #!/usr/bin/env python3
 """V380 cloud and optional Home Assistant diagnostic (Python 3.11+).
@@ -1856,7 +1956,7 @@ import types
 from urllib.parse import quote, urljoin, urlsplit
 
 DEPENDENCIES = "aiohttp cryptography av certifi"
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 _MODULES = ("errors", "shared", "account", "live", "mpegts", "recordings")
 _PROTOCOL = None
 

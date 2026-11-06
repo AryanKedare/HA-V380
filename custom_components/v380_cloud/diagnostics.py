@@ -28,5 +28,6 @@ async def async_get_config_entry_diagnostics(
         "device_catalog": catalog,
         "live_stream_failures": getattr(client, "live_stream_failures", 0),
         "last_live_failure": dict(getattr(client, "last_live_failure", {})),
+        "live_session_recovery_attempts": getattr(client, "live_session_recovery_attempts", 0),
     }
 

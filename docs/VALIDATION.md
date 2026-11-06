@@ -1,6 +1,49 @@
-# Validation status — 5 November 2026
+# Validation status — 6 November 2026
 
-## Current 0.1.7 results
+## Current 0.1.8 results
+
+The user reports a startup network timeout and confirms that V380 Pro still
+plays and an integration reload restores HA video. The 0.1.7 outer timeout
+always reported media_stream, so that log does not identify which upstream
+step stalled. No new vendor response or account credentials were captured.
+
+Inspection found that each HTTP request discarded its working relay hint.
+Repeated 25-second HTTP startup deadlines could cancel sequential relay attempts
+and restart with the same slow first routes indefinitely. Synthetic binary-media
+regressions reproduce this deadline sequence and verify that shared route history
+advances successive HTTP attempts to an available alternative.
+
+Version 0.1.8 remembers a working relay for 15 minutes, tries it before discovery,
+deprioritizes failed/cancelled starts for 60 seconds, and retains recent alternate
+routes if discovery fails. A startup network timeout allows one saved account
+session/catalog recovery on the next request, limited to once per account per
+five minutes. Temporary account API failure can retain cached camera credentials;
+real saved-password rejection remains an auth failure. Unload clears route state.
+
+Failure diagnostics now preserve dispatcher/login/relay/media progress instead
+of inventing a media stage for every outer timeout. Counters and enums are
+allowlisted and bounded; endpoints, sessions, passwords and device IDs are
+excluded. Normal downstream cancellation does not count as a relay failure.
+
+Full suite: **179 passed, 14 subtests passed, exit status 0** on Core 2026.11.0,
+Python 3.14.10, PyAV 19.0.0 and pytest 9.2.0 on macOS ARM64. Nine dependency/HA
+warnings remain. Sixteen new tests cover shared route state, preferred-route
+failure, dispatcher outage, cache expiry, audio-only cancellation, privacy,
+account recovery cooldown/concurrency and genuine rejection. The real HTTP
+startup test also checks exact stage propagation and the recovery trigger.
+The seven real HA/HLS pipeline tests continue to pass. Standalone tester 1.5.0
+embeds the matching protocol and its self-test decodes 15 frames successfully.
+
+This establishes the offline routing/recovery behavior, not the exact cause
+of the user's upstream stall or long-running camera/browser reliability.
+No vendor account or installed HA was accessed.
+
+Primary routing reference:
+[OpenV380 cached-relay connection flow](https://github.com/cimplesid/v380-mac/blob/c3f5c5d17f4930fb90546be5d6c335c850975b86/Sources/V380/V380Client.swift).
+The retry ordering and cache bounds here are integration policy; no new wire
+commands or fragment acknowledgements were inferred from the timeout.
+
+## Previous 0.1.7 results
 
 The user provides a Core 2026.11.0 log with opening/demuxing errors and
 `Stream is not configured for format 'hls'`. Every logged camera URL still has

@@ -1,9 +1,9 @@
 #!/bin/sh
-# Install the V380 Cloud 0.1.7 component; no account credentials needed.
+# Install the V380 Cloud 0.1.8 component; no account credentials needed.
 set -eu
 
 REPOSITORY="AryanKedare/HA-V380"
-DEFAULT_REF="a49c22882c8d38b336ec0262a04490c92ce81ac3"
+DEFAULT_REF="79e3c5297b55fdf6f7bd8bedc34189ed542a4a23"
 config_dir="${HA_CONFIG_DIR:-/config}"
 release_ref="$DEFAULT_REF"
 ref_supplied=0
@@ -25,7 +25,7 @@ Usage: sh install.sh [--config-dir DIR] [--ref REF | --source DIR]
   --source DIR      Install from an extracted repository or component directory, offline
   -h, --help       Show this help
 
-The default download is pinned to the 0.1.7 commit.
+The default download is pinned to the 0.1.8 commit.
 The config directory must already contain configuration.yaml.
 An existing component is backed up under CONFIG_DIR/.v380-cloud-backups.
 Home Assistant is not restarted automatically.
