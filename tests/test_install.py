@@ -151,7 +151,7 @@ exec ''' + repr(real_mv) + ''' "$@"
         self.run_installer(env=env)
         self.assert_new_install()
         self.assertEqual((self.root / 'download-url.txt').read_text(),
-            'https://api.github.com/repos/AryanKedare/HA-V380/zipball/a49c22882c8d38b336ec0262a04490c92ce81ac3')
+            'https://api.github.com/repos/AryanKedare/HA-V380/zipball/79e3c5297b55fdf6f7bd8bedc34189ed542a4a23')
 
     def test_wget_fallback_accepts_branch_ref(self):
         env = self.download_environment('wget')
