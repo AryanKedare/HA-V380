@@ -82,6 +82,16 @@ explicit error, without guessed sources or local-camera fallback.
 
 ## Verification
 
+For 0.1.8, relay state belongs to the account client and survives HTTP transport
+replacement. Recent working routes precede dispatcher discovery; cancelled
+starts and failed routes move behind alternatives. Route hints expire and stay
+in memory. Startup timeout progress triggers one saved-session/catalog refresh
+on the next request with a shared five-minute cooldown. Real auth rejection
+still propagates. The full Core 2026.11.0 / Python 3.14.10 suite completes with
+179 tests and 14 subtests, exit 0, including 16 new routing/recovery regressions.
+Actual failed-stage propagation is covered through authenticated local HTTP.
+No installed HA or real vendor account was accessed.
+
 For 0.1.7 the full Core 2026.11.0 / Python 3.14.10 run completes with **163 tests
 and 14 subtests passed**, exit 0. Seven real-HA pipeline tests cover local HTTP,
 Core demux/HLS, fMP4 decoding, uninterrupted renewal, retry, idle replacement,

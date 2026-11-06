@@ -6,7 +6,7 @@ class CloudError(Exception):
     _STAGES = frozenset({
         "device_credentials", "dispatcher_connect", "dispatcher_response",
         "device_login_connect", "device_login_response", "relay_connect",
-        "relay_handshake", "media_stream",
+        "relay_handshake", "media_stream", "account_refresh",
     })
     _REASONS = frozenset({
         "dns_failed", "connection_failed", "network_timeout", "incomplete_response",
@@ -27,9 +27,9 @@ class CloudError(Exception):
         # Messages, endpoints, handles, sessions and device IDs never do.
         self.diagnostic = {}
         self.relay_attempts: list[dict] = []
-        if stage in self._STAGES:
+        if isinstance(stage, str) and stage in self._STAGES:
             self.diagnostic["stage"] = stage
-        if reason in self._REASONS:
+        if isinstance(reason, str) and reason in self._REASONS:
             self.diagnostic["detail"] = reason
         for name, value, low, high in (
             ("code", code, -65535, 65535),

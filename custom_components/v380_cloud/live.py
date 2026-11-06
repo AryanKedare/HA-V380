@@ -13,7 +13,7 @@ import asyncio
 import base64
 from collections.abc import AsyncIterator, Mapping
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import secrets
 import socket
@@ -197,6 +197,44 @@ class FrameDecoder:
         return Frame(payload, codec, timestamp, keyframe, sequence)
 
 
+@dataclass(slots=True)
+class RelayState:
+    """Private per-camera routing hints; never put endpoint values in reports."""
+
+    relays: list[str] = field(default_factory=list)
+    discovered_at: float = float('-inf')
+    preferred: str | None = None
+    succeeded_at: float = float('-inf')
+    attempted: dict[str, float] = field(default_factory=dict)
+    failed: dict[str, float] = field(default_factory=dict)
+    cache_seconds: float = 900.0
+    cooldown_seconds: float = 60.0
+
+    def order(self, relays: list[str], now: float) -> list[str]:
+        def priority(host):
+            blocked = now - self.failed.get(host, float('-inf')) < self.cooldown_seconds
+            preferred = host == self.preferred and now - self.succeeded_at < self.cache_seconds
+            return blocked, not (preferred and not blocked), self.attempted.get(host, float('-inf'))
+        return sorted(dict.fromkeys(relays), key=priority)
+
+    def cached(self, now: float) -> list[str]:
+        relays = list(self.relays) if now - self.discovered_at < self.cache_seconds else []
+        if self.preferred and now - self.succeeded_at < self.cache_seconds and self.preferred not in relays:
+            relays.insert(0, self.preferred)
+        return self.order(relays, now)
+
+    def remember(self, relays: list[str], now: float) -> None:
+        self.relays = list(dict.fromkeys(relays))[:14]
+        self.discovered_at = now
+        allowed = set(self.relays) | ({self.preferred} if self.preferred else set())
+        self.attempted = {key: value for key, value in self.attempted.items() if key in allowed}
+        self.failed = {key: value for key, value in self.failed.items() if key in allowed}
+
+    def success(self, host: str, now: float) -> None:
+        self.preferred, self.succeeded_at = host, now
+        self.failed.pop(host, None)
+
+
 class CloudLiveClient:
     """A one-viewer cloud session; the caller consumes and closes async_frames."""
 
@@ -220,6 +258,8 @@ class CloudLiveClient:
         relay_port: int = 8800,
         timeout: float = 15,
         audio: bool = True,
+        relay_state: RelayState | None = None,
+        progress: dict[str, Any] | None = None,
     ) -> None:
         self.metadata = dict(metadata)
         self.device_id = int(metadata.get("device_id", metadata.get("id", 0)))
@@ -239,6 +279,11 @@ class CloudLiveClient:
         self.relay_port = relay_port
         self.timeout = timeout
         self.audio = audio
+        self.relay_state = relay_state if relay_state is not None else RelayState()
+        self.progress = progress if progress is not None else {}
+        for key in ('relays_tried', 'media_headers', 'video_frames', 'keyframes', 'transport_reconnects'):
+            self.progress[key] = 0
+        self.progress['stage'] = 'dispatcher_connect'
         self.login_protocol_version: int | None = None
         self.reconnect_count = 0
         self._last_relay: str | None = None
@@ -261,9 +306,11 @@ class CloudLiveClient:
         """Ask the app's dispatcher for cloud relays; never probe the LAN."""
         writer = None
         stage = "dispatcher_connect"
+        self.progress['stage'] = stage
         try:
             reader, writer = await self._open(self.dispatch_server, self.dispatch_port)
             stage = "dispatcher_response"
+            self.progress['stage'] = stage
             random_key = self._random_key()
             writer.write(dispatch_request(self.device_id, self.zone, random_key))
             await writer.drain()
@@ -300,9 +347,11 @@ class CloudLiveClient:
     async def _login(self, host: str) -> dict[str, Any]:
         writer = None
         stage = "device_login_connect"
+        self.progress['stage'] = stage
         try:
             reader, writer = await self._open(host, self.login_port)
             stage = "device_login_response"
+            self.progress['stage'] = stage
             random_key = self._random_key()
             request_id = secrets.randbelow(99999999) + 100
             payload = {
@@ -362,10 +411,12 @@ class CloudLiveClient:
 
     async def _start_relay(self, host: str, login: Mapping[str, Any]) -> tuple[asyncio.StreamReader, int]:
         stage = "relay_connect"
+        self.progress['stage'] = stage
         try:
             reader, writer = await self._open(host, self.relay_port)
             self._writer = writer
             stage = "relay_handshake"
+            self.progress['stage'] = stage
             handle, session = int(login["handle"]), int(login["session"])
             writer.write(relay_request(self.device_id, self.domain, self.camera_port, handle, session, audio=self.audio))
             await writer.drain()
@@ -397,7 +448,7 @@ class CloudLiveClient:
                     except StopAsyncIteration:
                         return
                     except TimeoutError as err:
-                        raise CloudError("V380 live video stopped arriving", stage="media_stream",
+                        raise CloudError("V380 live video stopped arriving", stage=self.progress.get('stage', 'media_stream'),
                                          reason="network_timeout") from err
                     video = frame.codec in ("h264", "hevc", "h265")
                     if needs_keyframe:
@@ -428,6 +479,7 @@ class CloudLiveClient:
                 delay = self.reconnect_delays[failures]
                 failures += 1
                 self.reconnect_count += 1
+                self.progress['transport_reconnects'] = self.reconnect_count
             finally:
                 await session.aclose()
             try:
@@ -438,21 +490,51 @@ class CloudLiveClient:
 
     async def _async_session_frames(self) -> AsyncIterator[Frame]:
         """Yield frames from one authenticated relay session."""
-        relays = await self.async_relays()
-        if self._last_relay in relays:
-            relays = [self._last_relay] + [host for host in relays if host != self._last_relay]
+        loop = asyncio.get_running_loop()
+        cached = self.relay_state.cached(loop.time())
+        relays = cached[:1]
+        using_cache = bool(relays)
+        attempted: set[str] = set()
+        dispatched = False
         last_error: Exception | None = None
         attempts: list[dict[str, Any]] = []
-        for host in relays:
+        while True:
+            if not relays:
+                if dispatched:
+                    break
+                dispatched = True
+                self.progress['stage'] = 'dispatcher_connect'
+                try:
+                    discovered = await self.async_relays()
+                except CloudError as err:
+                    last_error = err
+                    relays = [host for host in self.relay_state.cached(loop.time()) if host not in attempted]
+                    using_cache = True
+                    if not relays:
+                        raise
+                else:
+                    self.relay_state.remember(discovered, loop.time())
+                    relays = [host for host in self.relay_state.order(discovered, loop.time()) if host not in attempted]
+                    using_cache = False
+                if not relays:
+                    break
+            host = relays.pop(0)
+            attempted.add(host)
+            self.relay_state.attempted[host] = loop.time()
+            self.progress['relays_tried'] = min(self.progress['relays_tried'] + 1, 65535)
+            self.progress['cached_relay_used'] = using_cache
             emitted = False
+            video_started = False
             self.login_protocol_version = None
             stage = "device_login_connect"
+            self.progress['stage'] = stage
             try:
                 login = await self._login(host)
                 login_version = int(login.get("version", 0))
                 if 0 <= login_version <= 255:
                     self.login_protocol_version = login_version
                 stage = "relay_connect"
+                self.progress['stage'] = stage
                 reader, media_version = await self._start_relay(host, login)
                 writer = self._writer
                 assert writer is not None
@@ -460,10 +542,12 @@ class CloudLiveClient:
                 decoder = FrameDecoder(handle, int(login.get("version", 31)), media_version,
                                        fragment_limit=self.fragment_limit)
                 stage = "media_stream"
+                self.progress['stage'] = stage
                 received_fragments = 0
                 last_ack = asyncio.get_running_loop().time()
                 while True:
                     header = await self._read(reader, 12)
+                    self.progress['media_headers'] = min(self.progress['media_headers'] + 1, 65535)
                     marker = header[0]
                     if marker == 0x7F:
                         length = struct.unpack_from("<H", header, 7)[0]
@@ -479,8 +563,13 @@ class CloudLiveClient:
                             await writer.drain()
                             last_ack = now
                         if frame is not None:
+                            if frame.codec in ('h264', 'hevc', 'h265'):
+                                self.progress['video_frames'] = min(self.progress['video_frames'] + 1, 65535)
                             if frame.keyframe and frame.codec in ("h264", "hevc", "h265"):
                                 self._last_relay = host
+                                video_started = True
+                                self.progress['keyframes'] = min(self.progress['keyframes'] + 1, 65535)
+                                self.relay_state.success(host, loop.time())
                             emitted = True
                             yield frame
                     elif marker == 0x2F:
@@ -498,11 +587,18 @@ class CloudLiveClient:
                     elif marker not in (0x3F, 0x4F, 0x5F, 0x6F):
                         raise UnsupportedError("The cloud relay sent an unsupported media packet", stage=stage,
                                                reason="packet_type_unsupported", packet_type=marker)
+            except asyncio.CancelledError:
+                # An outer startup deadline must advance the next attempt,
+                # rather than restarting from the same slow first relay.
+                if not video_started:
+                    self.relay_state.failed[host] = loop.time()
+                raise
             except AuthError:
                 raise
             except UnsupportedError:
                 raise
             except (CloudError, OSError, TimeoutError, asyncio.IncompleteReadError, ValueError, TypeError) as err:
+                self.relay_state.failed[host] = loop.time()
                 detail = self._transport_error(err, stage)
                 if self.login_protocol_version is not None:
                     detail.diagnostic["login_protocol_version"] = self.login_protocol_version
@@ -574,9 +670,11 @@ class ForwardedCloudLiveClient(CloudLiveClient):
     async def _binary_login(self, host: str, username: str, *, padded: bool) -> dict[str, Any]:
         writer = None
         stage = "device_login_connect"
+        self.progress['stage'] = stage
         try:
             reader, writer = await self._open(host, self.relay_port)
             stage = "device_login_response"
+            self.progress['stage'] = stage
             writer.write(forwarded_login_request(self.device_id, self.domain, self.camera_port,
                 username, self._password, self._random_key(), padded=padded))
             await writer.drain()
@@ -627,10 +725,12 @@ class ForwardedCloudLiveClient(CloudLiveClient):
 
     async def _start_relay(self, host: str, login: Mapping[str, Any]) -> tuple[asyncio.StreamReader, int]:
         stage = "relay_connect"
+        self.progress['stage'] = stage
         try:
             reader, writer = await self._open(host, self.relay_port)
             self._writer = writer
             stage = "relay_handshake"
+            self.progress['stage'] = stage
             # Forwarding mode 1022 routes the camera's native stream protocol.
             packet = bytearray(256)
             struct.pack_into("<II", packet, 0, 301, 1022)
